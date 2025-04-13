@@ -9,6 +9,11 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from tiingo import TiingoClient
+import time
+import threading
+from pathlib import Path
+import sqlite3
+from bs4 import BeautifulSoup
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +37,22 @@ tiingo_client = TiingoClient(tiingo_config)
 
 # In-memory cache to avoid hitting API limits frequently
 cache = {}
+
+# Technical indicator explanations
+INDICATOR_EXPLANATIONS = {
+    "sma20": "20-Day Simple Moving Average: Short-term price trend indicator. Price above SMA20 suggests short-term bullish momentum.",
+    "sma50": "50-Day Simple Moving Average: Medium-term price trend indicator, often watched by institutional investors.",
+    "sma200": "200-Day Simple Moving Average: Long-term price trend indicator. Price above SMA200 suggests bull market.",
+    "rsi": "Relative Strength Index: Momentum oscillator measuring speed and change of price movements. Values over 70 indicate overbought conditions; below 30 indicate oversold.",
+    "atr": "Average True Range: Volatility indicator showing the average range between high and low prices. Higher values indicate higher volatility.",
+    "volume_ratio": "Volume vs 20-Day Average: Compares current trading volume to its 20-day average. Values over 1.0 show above-average volume, suggesting strong conviction behind price moves.",
+    "support": "Price levels where downward trends often pause or reverse due to concentrated buying interest.",
+    "resistance": "Price levels where upward trends often pause or reverse due to concentrated selling pressure.",
+    "relative_strength": "Compares the stock's performance to a benchmark (SPY/S&P 500). Positive values indicate outperformance."
+}
+
+# Enhanced in-memory cache with timestamps
+timed_cache = {}
 
 # Add a function to convert NumPy types to Python native types
 def convert_to_json_serializable(obj):
@@ -57,129 +78,318 @@ class NumpyJSONEncoder(json.JSONEncoder):
 # Configure Flask to use the custom JSONEncoder
 app.json_encoder = NumpyJSONEncoder
 
-def get_stock_data_from_api(symbol):
-    """Fetches stock data from Alpha Vantage API"""
-    if not API_KEY:
-        logging.error("Alpha Vantage API key not found.")
-        return None, "API key missing or invalid. Please set a valid Alpha Vantage API key in the .env file."
+# Constants
+CACHE_DURATION = 3600  # 1 hour in seconds
 
-    symbol = symbol.upper()
-    if symbol in cache:
-        logging.info(f"Cache hit for {symbol}")
-        return cache[symbol], None
+# Initialize SQLite database for persistent caching
+def init_db():
+    conn = sqlite3.connect('stock_data.db')
+    c = conn.cursor()
+    # Create tables if they don't exist
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_cache (
+        symbol TEXT PRIMARY KEY,
+        data TEXT,
+        timestamp INTEGER
+    )
+    ''')
+    
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS technical_indicators (
+        symbol TEXT,
+        indicator TEXT,
+        data TEXT,
+        timestamp INTEGER,
+        PRIMARY KEY (symbol, indicator)
+    )
+    ''')
+    
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS news_cache (
+        symbol TEXT PRIMARY KEY,
+        data TEXT,
+        timestamp INTEGER
+    )
+    ''')
+    conn.commit()
+    conn.close()
 
-    logging.info(f"Fetching data from Alpha Vantage for {symbol}...")
-    params_quote = {
-        'function': 'GLOBAL_QUOTE',
-        'symbol': symbol,
-        'apikey': API_KEY
-    }
-    params_overview = {
-        'function': 'OVERVIEW',
-        'symbol': symbol,
-        'apikey': API_KEY
-    }
+# Initialize DB on startup
+init_db()
 
+# Technical indicator explanations
+TECHNICAL_INDICATORS = {
+    'SMA': 'Simple Moving Average - Average price over a specified period.',
+    'EMA': 'Exponential Moving Average - Weighted average giving more importance to recent prices.',
+    'RSI': 'Relative Strength Index - Momentum oscillator measuring speed and change of price movements.',
+    'MACD': 'Moving Average Convergence Divergence - Trend-following momentum indicator.',
+    'BB': 'Bollinger Bands - Volatility bands placed above and below a moving average.',
+    'STOCH': 'Stochastic Oscillator - Momentum indicator comparing closing price to price range.',
+    'ADX': 'Average Directional Index - Measures trend strength without regard to direction.',
+    'OBV': 'On-Balance Volume - Uses volume flow to predict changes in stock price.'
+}
+
+# Cache functions using SQLite
+def get_from_cache(symbol, table='stock_cache'):
+    conn = sqlite3.connect('stock_data.db')
+    c = conn.cursor()
+    c.execute(f"SELECT data, timestamp FROM {table} WHERE symbol = ?", (symbol,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        data, timestamp = result
+        current_time = int(time.time())
+        if current_time - timestamp < CACHE_DURATION:
+            logging.info(f"Retrieved {table} data for {symbol} from cache")
+            return json.loads(data)
+    return None
+
+def save_to_cache(symbol, data, table='stock_cache'):
+    conn = sqlite3.connect('stock_data.db')
+    c = conn.cursor()
+    timestamp = int(time.time())
+    c.execute(f"INSERT OR REPLACE INTO {table} (symbol, data, timestamp) VALUES (?, ?, ?)",
+              (symbol, json.dumps(data), timestamp))
+    conn.commit()
+    conn.close()
+    logging.info(f"Saved {table} data for {symbol} to cache")
+
+def get_technical_indicator(symbol, indicator):
+    conn = sqlite3.connect('stock_data.db')
+    c = conn.cursor()
+    c.execute("SELECT data, timestamp FROM technical_indicators WHERE symbol = ? AND indicator = ?", 
+              (symbol, indicator))
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        data, timestamp = result
+        current_time = int(time.time())
+        if current_time - timestamp < CACHE_DURATION:
+            logging.info(f"Retrieved {indicator} data for {symbol} from cache")
+            return json.loads(data)
+    
+    # Get fresh data from Alpha Vantage
+    function = f"{indicator}"
+    if indicator == 'SMA' or indicator == 'EMA':
+        url = f"https://www.alphavantage.co/query?function={function}&symbol={symbol}&interval=daily&time_period=14&series_type=close&apikey={API_KEY}"
+    elif indicator == 'RSI':
+        url = f"https://www.alphavantage.co/query?function=RSI&symbol={symbol}&interval=daily&time_period=14&series_type=close&apikey={API_KEY}"
+    elif indicator == 'MACD':
+        url = f"https://www.alphavantage.co/query?function=MACD&symbol={symbol}&interval=daily&series_type=close&apikey={API_KEY}"
+    elif indicator == 'BB':
+        url = f"https://www.alphavantage.co/query?function=BBANDS&symbol={symbol}&interval=daily&time_period=20&series_type=close&apikey={API_KEY}"
+    else:
+        url = f"https://www.alphavantage.co/query?function={function}&symbol={symbol}&interval=daily&apikey={API_KEY}"
+    
     try:
-        response_quote = requests.get(BASE_URL, params=params_quote)
-        response_quote.raise_for_status() 
-        quote_data = response_quote.json().get('Global Quote')
+        response = requests.get(url)
+        data = response.json()
         
-        response_overview = requests.get(BASE_URL, params=params_overview)
-        response_overview.raise_for_status()
-        overview_data = response_overview.json()
+        # Check for error message
+        if "Error Message" in data:
+            logging.error(f"Alpha Vantage API error: {data['Error Message']}")
+            return None
         
-        if not quote_data or not overview_data or 'Symbol' not in overview_data or not overview_data.get('Symbol'):
-            logging.warning(f"Incomplete data received for {symbol}")
-            return None, "Data not found or incomplete. The API may be experiencing issues, or you may have reached your API request limit for today."
-
-        # Check for API limit note
-        if "Note" in quote_data or "Note" in overview_data:
-             logging.warning(f"Alpha Vantage API limit likely reached for {symbol}.")
-             if "Note" in quote_data:
-                 note = quote_data["Note"]
-             else:
-                 note = overview_data["Note"]
-             return None, f"Alpha Vantage API limit reached: {note}"
-
-        # Get analyst ratings data - in a real app, you would use a premium API for this
-        # Here we're calculating target prices based on current price with some variation
-        try:
-            current_price = float(quote_data.get('05. price', 0))
-            top_analysts = ['Morgan Stanley', 'JP Morgan', 'Goldman Sachs', 'Bank of America'] 
+        # Check for API limit
+        if "Note" in data and "API call frequency" in data["Note"]:
+            logging.warning(f"Alpha Vantage API limit reached: {data['Note']}")
+            return None
             
-            analysts = []
-            ratings = ['Buy', 'Buy', 'Hold', 'Buy']  # Most analysts are bullish in this example
-            for i, analyst in enumerate(top_analysts):
-                # Generate realistic target prices based on current price
-                target_multiplier = 1.15 + (i * 0.02)  # Between 15-21% higher than current price
-                analysts.append({
-                    'analystName': analyst,
-                    'rating': ratings[i],
-                    'accuracyScore': 70 + i * 3,  # Between 70-79% accuracy
-                    'targetPrice': round(current_price * target_multiplier, 2),
-                    'date': '2025-03-' + str(20 - i * 5)  # Dates between 5th-20th
+        # Save to cache
+        conn = sqlite3.connect('stock_data.db')
+        c = conn.cursor()
+        timestamp = int(time.time())
+        c.execute("INSERT OR REPLACE INTO technical_indicators (symbol, indicator, data, timestamp) VALUES (?, ?, ?, ?)",
+                  (symbol, indicator, json.dumps(data), timestamp))
+        conn.commit()
+        conn.close()
+        
+        return data
+    except Exception as e:
+        logging.error(f"Error fetching {indicator} data for {symbol}: {e}")
+        return None
+
+def get_stock_news(symbol):
+    # Check cache first
+    cached_news = get_from_cache(symbol, table='news_cache')
+    if cached_news:
+        return cached_news
+    
+    # If not in cache, fetch from Alpha Vantage
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={symbol}&apikey={API_KEY}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        # Check for error message
+        if "Error Message" in data:
+            logging.error(f"Alpha Vantage API error: {data['Error Message']}")
+            return None
+        
+        # Check for API limit
+        if "Note" in data and "API call frequency" in data["Note"]:
+            logging.warning(f"Alpha Vantage API limit reached: {data['Note']}")
+            return None
+            
+        # Process news data
+        news_items = []
+        if 'feed' in data:
+            for item in data['feed'][:10]:  # Limit to 10 news items
+                news_items.append({
+                    'title': item.get('title', ''),
+                    'summary': item.get('summary', ''),
+                    'url': item.get('url', ''),
+                    'source': item.get('source', ''),
+                    'time_published': item.get('time_published', ''),
+                    'sentiment': item.get('overall_sentiment_score', 0)
                 })
-            
-            # Calculate consensus rating (most frequent rating)
-            ratings_only = [a['rating'] for a in analysts]
-            consensus = max(set(ratings_only), key=ratings_only.count)
-            
-            # Calculate average target price
-            avg_target = round(sum(a['targetPrice'] for a in analysts) / len(analysts), 2)
-        except Exception as e:
-            logging.error(f"Error generating analyst data: {e}")
-            analysts = []
-            consensus = 'N/A'
-            avg_target = None
+        
+        result = {'news': news_items}
+        
+        # Save to cache
+        save_to_cache(symbol, result, table='news_cache')
+        
+        return result
+    except Exception as e:
+        logging.error(f"Error fetching news for {symbol}: {e}")
+        return None
 
-        stock_info = {
-            'symbol': quote_data.get('01. symbol'),
-            'name': overview_data.get('Name'),
-            'currentPrice': float(quote_data.get('05. price', 0)),
-            'change': float(quote_data.get('09. change', 0)),
-            'percentChange': float(quote_data.get('10. change percent', '0%').replace('%', '')),
-            'marketCap': overview_data.get('MarketCapitalization', 'N/A'),
-            'peRatio': overview_data.get('PERatio', 'N/A'),
-            'high52Week': overview_data.get('52WeekHigh', 'N/A'),
-            'low52Week': overview_data.get('52WeekLow', 'N/A'),
-            # Adding sources for research
-            'reliableSources': [
-                {'url': f'https://finance.yahoo.com/quote/{symbol}', 'name': 'Yahoo Finance', 'reliability': 'medium'},
-                {'url': f'https://www.google.com/finance/quote/{symbol}:NASDAQ', 'name': 'Google Finance', 'reliability': 'medium'}, 
-                {'url': f'https://www.sec.gov/edgar/search/#/q={symbol}', 'name': 'SEC Filings', 'reliability': 'high'}
-            ],
-            'unreliableSources': [
-                {'name': 'Social Media Stock Forums', 'reason': 'User Generated Content'},
-                {'name': 'Promotional Investment Sites', 'reason': 'Potential Bias'}
-            ],
-            'summary': f"Summary for {overview_data.get('Name', symbol)} based on available data. Industry: {overview_data.get('Industry', 'N/A')}. Sector: {overview_data.get('Sector', 'N/A')}.",
+def scrape_company_info(symbol):
+    """Scrape basic company information from Yahoo Finance"""
+    try:
+        url = f"https://finance.yahoo.com/quote/{symbol}/profile"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code != 200:
+            logging.warning(f"Failed to scrape company info for {symbol}: HTTP {response.status_code}")
+            return {}
             
-            # Add analyst data to response
-            'analystData': {
-                'ratings': analysts,
-                'consensusRating': consensus,
-                'averageTargetPrice': avg_target
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extract company description
+        description = ""
+        desc_div = soup.find('section', {'class': 'quote-sub-section Mt(30px)'})
+        if desc_div:
+            p_tags = desc_div.find_all('p')
+            if p_tags:
+                description = p_tags[0].text.strip()
+        
+        # Extract sector and industry
+        sector = ""
+        industry = ""
+        profile_details = soup.find_all('div', {'class': 'asset-profile-container'})
+        if profile_details:
+            spans = profile_details[0].find_all('span')
+            for i, span in enumerate(spans):
+                if "Sector" in span.text:
+                    if i+1 < len(spans):
+                        sector = spans[i+1].text.strip()
+                if "Industry" in span.text:
+                    if i+1 < len(spans):
+                        industry = spans[i+1].text.strip()
+        
+        company_info = {
+            'description': description,
+            'sector': sector,
+            'industry': industry
+        }
+        
+        return company_info
+    except Exception as e:
+        logging.error(f"Error scraping company info for {symbol}: {e}")
+        return {}
+
+def get_stock_data_from_api(symbol):
+    """Fetch stock data from Alpha Vantage API with caching"""
+    # Check cache first
+    cached_data = get_from_cache(symbol)
+    if cached_data:
+        return cached_data
+
+    if not API_KEY:
+        logging.error("ALPHA_VANTAGE_API_KEY is not set")
+        return {"error": "API key is not configured"}
+
+    # Global quote endpoint for current price
+    url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={API_KEY}"
+    
+    try:
+        response = requests.get(url)
+        quote_data = response.json()
+        
+        # Check for error message or empty response
+        if "Error Message" in quote_data:
+            logging.error(f"Alpha Vantage API error: {quote_data['Error Message']}")
+            return {"error": f"API Error: {quote_data['Error Message']}"}
+            
+        # Check for API limit
+        if "Note" in quote_data and "API call frequency" in quote_data["Note"]:
+            logging.warning(f"Alpha Vantage API limit reached: {quote_data['Note']}")
+            return {"error": "API rate limit reached. Please try again later."}
+            
+        # Check for empty or incomplete data
+        if not quote_data.get("Global Quote", {}).get("05. price"):
+            logging.warning(f"Incomplete data received for {symbol}")
+            return {"error": f"No data found for symbol: {symbol}"}
+        
+        # Company overview for more details
+        overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={API_KEY}"
+        overview_response = requests.get(overview_url)
+        overview_data = overview_response.json()
+        
+        # Check if overview data is empty (just {})
+        if not overview_data or "Symbol" not in overview_data:
+            logging.warning(f"No company overview data for {symbol}")
+            
+        # Extract price data
+        quote = quote_data.get("Global Quote", {})
+        current_price = float(quote.get("05. price", 0))
+        previous_close = float(quote.get("08. previous close", 0))
+        change = float(quote.get("09. change", 0))
+        percent_change = quote.get("10. change percent", "0%").strip("%")
+        
+        # Get company name from overview or use symbol if not available
+        company_name = overview_data.get("Name", symbol)
+        
+        # Scrape additional info
+        scraped_info = scrape_company_info(symbol)
+        
+        # Construct stock info
+        stock_info = {
+            "symbol": symbol,
+            "name": company_name,
+            "currentPrice": round(current_price, 2),
+            "change": round(change, 2),
+            "percentChange": percent_change,
+            "marketCap": overview_data.get("MarketCapitalization", "N/A"),
+            "peRatio": overview_data.get("PERatio", "N/A"),
+            "dividendYield": overview_data.get("DividendYield", "N/A"),
+            "52WeekHigh": overview_data.get("52WeekHigh", "N/A"),
+            "52WeekLow": overview_data.get("52WeekLow", "N/A"),
+            "description": scraped_info.get("description", overview_data.get("Description", "N/A")),
+            "sector": scraped_info.get("sector", overview_data.get("Sector", "N/A")),
+            "industry": scraped_info.get("industry", overview_data.get("Industry", "N/A")),
+            "sources": {
+                "company": f"https://www.{symbol}.com",
+                "yahoo": f"https://finance.yahoo.com/quote/{symbol}",
+                "marketwatch": f"https://www.marketwatch.com/investing/stock/{symbol}",
+                "sec": f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={symbol}&owner=exclude&action=getcompany"
             }
         }
         
-        # Basic validation
-        if not stock_info['symbol'] or not stock_info['name']:
-            logging.warning(f"Validation failed for {symbol} data.")
-            return None, "Invalid data received"
-            
-        cache[symbol] = stock_info # Cache the result
-        return stock_info, None
-
-    except requests.exceptions.RequestException as e:
-        logging.error(f"API request failed for {symbol}: {e}")
-        return None, f"API request failed: {str(e)}"
-    except ValueError as e:
-        logging.error(f"Data parsing error for {symbol}: {e}")
-        return None, f"Error parsing API data: {str(e)}"
+        # Save to cache
+        save_to_cache(symbol, stock_info)
+        
+        return stock_info
     except Exception as e:
-        logging.error(f"An unexpected error occurred for {symbol}: {e}")
-        return None, f"An unexpected error occurred: {str(e)}"
+        logging.error(f"Error fetching stock data for {symbol}: {e}")
+        return {"error": f"Error fetching stock data: {str(e)}"}
 
 # --- Routes --- 
 
@@ -453,6 +663,333 @@ def get_technical_analysis(symbol):
         error_msg = f"Error getting technical analysis: {str(e)}"
         app.logger.error(error_msg)
         return jsonify({"error": error_msg}), 500
+
+def get_or_cache_technical_data(symbol, max_age_seconds=1800):
+    """Get technical data with intelligent caching"""
+    symbol = symbol.upper()
+    
+    # Check cache first
+    if symbol in timed_cache:
+        cache_entry = timed_cache[symbol]
+        # If cache is fresh (less than max_age_seconds old)
+        if time.time() - cache_entry['timestamp'] < max_age_seconds:
+            logging.info(f"Using cached technical data for {symbol}")
+            return cache_entry['data']
+    
+    # If no cache or cache is stale, get fresh data
+    try:
+        # Get technical analysis data directly from API function
+        # but get it as data instead of JSON response
+        analysis_result = get_technical_analysis_data(symbol)
+        
+        # Store in timed cache
+        timed_cache[symbol] = {
+            'data': analysis_result,
+            'timestamp': time.time()
+        }
+        
+        return analysis_result
+    except Exception as e:
+        logging.error(f"Error getting technical analysis for {symbol}: {e}")
+        # If we have stale cache data, return it with a warning
+        if symbol in timed_cache:
+            logging.warning(f"Using stale cache for {symbol} due to API error")
+            timed_cache[symbol]['data']['warning'] = "Data may be outdated due to API error"
+            return timed_cache[symbol]['data']
+        raise
+
+def get_technical_analysis_data(symbol):
+    """Non-route version of get_technical_analysis that returns data instead of JSON response"""
+    try:
+        # Get historical price data for the last 200 days
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)  # 1 year of data
+        
+        # Fetch historical data from Tiingo
+        historical_data = tiingo_client.get_ticker_price(
+            ticker=symbol,
+            startDate=start_date.strftime('%Y-%m-%d'),
+            endDate=end_date.strftime('%Y-%m-%d'),
+            frequency='daily'
+        )
+        
+        # Convert to pandas DataFrame for easier analysis
+        df = pd.DataFrame(historical_data)
+        
+        # Calculate technical indicators
+        # Moving Averages
+        df['sma20'] = df['close'].rolling(window=20).mean()
+        df['sma50'] = df['close'].rolling(window=50).mean()
+        df['sma200'] = df['close'].rolling(window=200).mean()
+        
+        # Momentum - RSI (Relative Strength Index)
+        delta = df['close'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # Volatility - ATR (Average True Range)
+        df['tr1'] = abs(df['high'] - df['low'])
+        df['tr2'] = abs(df['high'] - df['close'].shift())
+        df['tr3'] = abs(df['low'] - df['close'].shift())
+        df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+        df['atr'] = df['tr'].rolling(window=14).mean()
+        
+        # Volume analysis
+        df['volume_sma20'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_sma20']
+        
+        # Trend determination
+        current_price = df['close'].iloc[-1]
+        sma20 = df['sma20'].iloc[-1]
+        sma50 = df['sma50'].iloc[-1]
+        sma200 = df['sma200'].iloc[-1]
+        
+        # Determine trend
+        if current_price > sma50 and sma50 > sma200:
+            trend = "Strong Uptrend"
+        elif current_price > sma50:
+            trend = "Uptrend"
+        elif current_price < sma50 and sma50 < sma200:
+            trend = "Strong Downtrend"
+        elif current_price < sma50:
+            trend = "Downtrend"
+        else:
+            trend = "Sideways"
+            
+        # Calculate relative strength vs SPY (S&P 500 ETF)
+        spy_data = tiingo_client.get_ticker_price(
+            ticker='SPY',
+            startDate=start_date.strftime('%Y-%m-%d'),
+            endDate=end_date.strftime('%Y-%m-%d'),
+            frequency='daily'
+        )
+        spy_df = pd.DataFrame(spy_data)
+        
+        # Calculate relative performance over different periods
+        periods = [21, 63, 126, 252]  # Approximately 1 month, 3 months, 6 months, 1 year
+        relative_strength = {}
+        
+        for period in periods:
+            if len(df) >= period and len(spy_df) >= period:
+                # Stock performance
+                stock_start = df['close'].iloc[-period]
+                stock_end = df['close'].iloc[-1]
+                stock_perf = (stock_end / stock_start - 1) * 100
+                
+                # SPY performance
+                spy_start = spy_df['close'].iloc[-period]
+                spy_end = spy_df['close'].iloc[-1]
+                spy_perf = (spy_end / spy_start - 1) * 100
+                
+                # Relative strength
+                rs_value = stock_perf - spy_perf
+                
+                relative_strength[f'{period}_day'] = {
+                    'stock_performance': round(stock_perf, 2),
+                    'spy_performance': round(spy_perf, 2),
+                    'relative_strength': round(rs_value, 2),
+                    'outperforming': rs_value > 0
+                }
+        
+        # Prepare full technical analysis response
+        last_row = df.iloc[-1]
+        analysis_result = {
+            "technicalAnalysis": {
+                "price": round(current_price, 2),
+                "trend": trend,
+                "movingAverages": {
+                    "sma20": round(last_row['sma20'], 2) if not pd.isna(last_row['sma20']) else None,
+                    "sma50": round(last_row['sma50'], 2) if not pd.isna(last_row['sma50']) else None,
+                    "sma200": round(last_row['sma200'], 2) if not pd.isna(last_row['sma200']) else None,
+                    "priceVsSMA20": round((current_price / last_row['sma20'] - 1) * 100, 2) if not pd.isna(last_row['sma20']) else None,
+                    "priceVsSMA50": round((current_price / last_row['sma50'] - 1) * 100, 2) if not pd.isna(last_row['sma50']) else None,
+                    "priceVsSMA200": round((current_price / last_row['sma200'] - 1) * 100, 2) if not pd.isna(last_row['sma200']) else None
+                },
+                "momentum": {
+                    "rsi": round(last_row['rsi'], 2) if not pd.isna(last_row['rsi']) else None,
+                    "rsiZone": "Overbought" if last_row['rsi'] > 70 else "Oversold" if last_row['rsi'] < 30 else "Neutral"
+                },
+                "volatility": {
+                    "atr": round(last_row['atr'], 2) if not pd.isna(last_row['atr']) else None,
+                    "atrPercent": round((last_row['atr'] / current_price) * 100, 2) if not pd.isna(last_row['atr']) else None
+                },
+                "volume": {
+                    "current": last_row['volume'],
+                    "average20Day": round(last_row['volume_sma20'], 0) if not pd.isna(last_row['volume_sma20']) else None,
+                    "ratio": round(last_row['volume_ratio'], 2) if not pd.isna(last_row['volume_ratio']) else None
+                }
+            },
+            "relativeStrength": relative_strength,
+            "historicalData": {
+                "dates": [str(date) for date in df.index[-30:].tolist()],
+                "prices": df['close'][-30:].tolist(), 
+                "volumes": df['volume'][-30:].tolist()
+            }
+        }
+        
+        # Detect support and resistance levels
+        if len(df) > 30:
+            # Simplistic approach - use recent highs and lows
+            recent_df = df[-30:]
+            
+            # Find local maxima (resistance) and minima (support)
+            resistance_levels = []
+            support_levels = []
+            
+            for i in range(1, len(recent_df) - 1):
+                # Potential resistance
+                if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
+                    resistance_levels.append(round(recent_df['high'].iloc[i], 2))
+                
+                # Potential support
+                if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
+                    support_levels.append(round(recent_df['low'].iloc[i], 2))
+            
+            # Cluster close levels
+            def cluster_levels(levels, threshold_percent=1.0):
+                if not levels:
+                    return []
+                
+                clustered = []
+                levels.sort()
+                
+                current_cluster = [levels[0]]
+                
+                for level in levels[1:]:
+                    # If this level is within threshold% of the cluster average
+                    cluster_avg = sum(current_cluster) / len(current_cluster)
+                    if abs(level - cluster_avg) / cluster_avg * 100 < threshold_percent:
+                        current_cluster.append(level)
+                    else:
+                        # Start a new cluster
+                        clustered.append(round(sum(current_cluster) / len(current_cluster), 2))
+                        current_cluster = [level]
+                
+                # Add the last cluster
+                if current_cluster:
+                    clustered.append(round(sum(current_cluster) / len(current_cluster), 2))
+                
+                return clustered
+            
+            # Add support and resistance levels to the response
+            analysis_result["supportResistance"] = {
+                "support": cluster_levels(support_levels),
+                "resistance": cluster_levels(resistance_levels)
+            }
+        
+        return analysis_result
+    except Exception as e:
+        error_msg = f"Error getting technical analysis: {str(e)}"
+        app.logger.error(error_msg)
+        raise
+
+# Populate Alpha Vantage cache in background without waiting
+def background_cache_alpha_vantage_data(symbols):
+    """Fetch and cache data for multiple symbols in background"""
+    for symbol in symbols:
+        try:
+            get_stock_data_from_api(symbol)
+        except Exception as e:
+            logging.error(f"Error background caching {symbol}: {e}")
+
+# New route that combines data and adds explanations
+@app.route('/api/enriched/<symbol>', methods=['GET'])
+def get_enriched_data(symbol):
+    """Get combined data with technical explanations and improved caching"""
+    try:
+        symbol = symbol.upper()
+        
+        # Start background fetching Alpha Vantage data
+        # This will populate the cache in the background without blocking this request
+        threading.Thread(
+            target=background_cache_alpha_vantage_data, 
+            args=([symbol],), 
+            daemon=True
+        ).start()
+        
+        # Get technical analysis with smart caching
+        technical_data = get_or_cache_technical_data(symbol)
+        
+        # Add explanations for technical indicators
+        technical_data["indicatorExplanations"] = INDICATOR_EXPLANATIONS
+        
+        # Try to get stock data from Alpha Vantage cache
+        stock_data, _ = get_stock_data_from_api(symbol)
+        
+        # Prepare combined response
+        combined_data = {
+            "technical": technical_data,
+            "fundamentalData": stock_data if stock_data else {"status": "unavailable"},
+            "dataTimestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "cache": {
+                "technicalDataSource": "Tiingo API" + (" (cached)" if symbol in timed_cache else ""),
+                "fundamentalDataSource": "Alpha Vantage API" + (" (cached)" if symbol in cache else "")
+            }
+        }
+        
+        return jsonify(combined_data)
+    except Exception as e:
+        error_msg = f"Error retrieving enriched data: {str(e)}"
+        app.logger.error(error_msg)
+        return jsonify({"error": error_msg}), 500
+
+@app.route('/api/technical/<symbol>/<indicator>', methods=['GET'])
+def get_technical(symbol, indicator):
+    """API endpoint to get technical indicators for a stock"""
+    if indicator not in TECHNICAL_INDICATORS:
+        return jsonify({"error": f"Invalid indicator: {indicator}. Available indicators: {', '.join(TECHNICAL_INDICATORS.keys())}"}), 400
+        
+    data = get_technical_indicator(symbol, indicator)
+    if not data:
+        return jsonify({"error": f"Failed to retrieve {indicator} data for {symbol}"}), 404
+        
+    # Add explanation
+    data['explanation'] = TECHNICAL_INDICATORS.get(indicator, "")
+    
+    return jsonify(data)
+
+@app.route('/api/news/<symbol>', methods=['GET'])
+def get_news(symbol):
+    """API endpoint to get news for a stock"""
+    data = get_stock_news(symbol)
+    if not data:
+        return jsonify({"error": f"Failed to retrieve news for {symbol}"}), 404
+        
+    return jsonify(data)
+
+@app.route('/api/combined/<symbol>', methods=['GET'])
+def get_combined_data(symbol):
+    """API endpoint to get combined stock data, technical indicators, and news"""
+    # Get basic stock data
+    stock_data = get_stock_data_from_api(symbol)
+    if "error" in stock_data:
+        return jsonify(stock_data), 404
+        
+    # Get technical indicators (SMA and RSI as examples)
+    sma_data = get_technical_indicator(symbol, 'SMA')
+    rsi_data = get_technical_indicator(symbol, 'RSI')
+    
+    technical = {
+        'SMA': sma_data,
+        'RSI': rsi_data,
+        'explanations': {k: TECHNICAL_INDICATORS[k] for k in ['SMA', 'RSI']}
+    }
+    
+    # Get news
+    news_data = get_stock_news(symbol)
+    
+    # Combine all data
+    combined_data = {
+        'stock': stock_data,
+        'technical': technical,
+        'news': news_data.get('news', []) if news_data else []
+    }
+    
+    return jsonify(combined_data)
 
 if __name__ == '__main__':
     if not API_KEY:
