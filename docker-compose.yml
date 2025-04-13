@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  frontend:
+    build:
+      context: ./stock-researcher
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    environment:
+      - REACT_APP_API_URL=http://localhost/api
+
+  backend:
+    build:
+      context: ./stock-researcher-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000 

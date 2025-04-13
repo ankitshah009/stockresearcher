@@ -1,49 +1,38 @@
-# Getting Started with Create React App
+# Stock Researcher
+
+### Introduction
+
+Welcome to **Stock Researcher**, an innovative application designed to revolutionize how we analyze stocks by cutting through the noise of unreliable sources. This app addresses a critical issue in financial research: many existing websites are cluttered with biased information, and some industry voices are merely paid actors adding to the confusion.
+
+Our agentic workflow empowers users to bypass these pitfalls by directly accessing and analyzing data from critical company websites. By focusing on primary sources, Stock Researcher ensures authenticity and reliability, providing a clearer, more trustworthy path to stock analysis.
+
+### Our Mission
+
+- **Expose Unreliability:** Highlight the shortcomings of mainstream stock research platforms.
+- **Direct Source Analysis:** Prioritize data from official company websites over third-party noise.
+- **Agentic Workflow:** Leverage AI to intelligently filter and present the most relevant, authentic information.
+
+### Why We Stand Out
+
+In a sea of misinformation, Stock Researcher is your beacon of truth. We're not just another analysis tool; we're a movement to redefine trust in financial data. Our app uses AI to transform FinTech with transparency and precision.
+
+### Getting Started
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-## Available Scripts
+#### Available Scripts
 
 In the project directory, you can run:
 
-### `npm start`
+- **`npm start`**: Runs the app in development mode. Open [http://localhost:3000](http://localhost:3000) to view it in your browser. The page will reload when you make changes, and you may see lint errors in the console.
+- **`npm test`**: Launches the test runner in interactive watch mode. See [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- **`npm run build`**: Builds the app for production to the `build` folder. It bundles React in production mode and optimizes the build for performance. The build is minified, and filenames include hashes. Your app is ready to be deployed! See [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+- **`npm run eject`**: **Note: this is a one-way operation. Once you `eject`, you can't go back!** This command removes the single build dependency, copying all configuration files and dependencies (webpack, Babel, ESLint, etc.) into your project for full control. Use with caution.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+#### Learn More
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
-
-### `npm test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+- [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started)
+- [React documentation](https://reactjs.org/)
 
 ### Code Splitting
 
