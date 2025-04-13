@@ -41,6 +41,12 @@ const api = {
       const response = await axios.get(`${API_URL}/search`, {
         params: { symbol }
       });
+      
+      // Check if response.data is an array and if it's empty
+      if (Array.isArray(response.data) && response.data.length === 0) {
+        return { error: `No results found for symbol ${symbol}` };
+      }
+      
       return response.data;
     } catch (error) {
       if (error.response && error.response.status === 404) {
@@ -57,7 +63,6 @@ const api = {
         console.error('Network Error searching for stock:', error.message);
         return { error: 'Network error. Please check connection.' };
       }
-      // Removed the generic throw error here to return structured error info
     }
   },
 

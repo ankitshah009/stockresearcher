@@ -113,7 +113,7 @@ const StockSearch = () => {
         }
         setSearchResults([]);
       } else {
-        setSearchResults(result);
+        setSearchResults(Array.isArray(result) ? result : []);
       }
     } catch (err) {
       console.error('Error during search:', err);
@@ -139,10 +139,25 @@ const StockSearch = () => {
 
   return (
     <div className="stock-search">
-      <div className="search-container">
+      <div className="search-container" style={{ 
+        display: 'flex', 
+        marginBottom: '2rem',
+        boxShadow: '0 5px 15px rgba(0, 0, 0, 0.1)',
+        borderRadius: '50px',
+        overflow: 'hidden',
+        maxWidth: '800px',
+        margin: '0 auto'
+      }}>
         <input
           type="text"
           className="search-input"
+          style={{
+            flex: 1,
+            padding: '1rem 1.5rem',
+            fontSize: '1.1rem',
+            border: 'none',
+            outline: 'none'
+          }}
           placeholder="Enter stock symbol (e.g., AAPL)"
           value={symbol}
           onChange={(e) => setSymbol(e.target.value.toUpperCase())}
@@ -150,6 +165,17 @@ const StockSearch = () => {
         />
         <button
           className="search-button"
+          style={{
+            background: 'linear-gradient(135deg, #2c3e50, #3498db)',
+            color: 'white',
+            border: 'none',
+            padding: '0 2rem',
+            cursor: loading || !symbol.trim() ? 'not-allowed' : 'pointer',
+            fontWeight: 'bold',
+            transition: 'all 0.3s',
+            fontSize: '1rem',
+            opacity: loading || !symbol.trim() ? 0.7 : 1
+          }}
           onClick={handleSearch}
           disabled={loading || !symbol.trim()}
         >
@@ -162,7 +188,14 @@ const StockSearch = () => {
       </div>
 
       {error && (
-        <div className="error-container">
+        <div className="error-container" style={{
+          maxWidth: '800px',
+          margin: '0 auto 2rem auto',
+          backgroundColor: 'rgba(231, 76, 60, 0.1)',
+          padding: '1rem',
+          borderRadius: '8px',
+          color: '#e74c3c'
+        }}>
           <p className="error-message">{error.message}</p>
           {error.useDefaults && (
             <button className="default-data-button" onClick={handleUseDefaults}>
@@ -173,12 +206,40 @@ const StockSearch = () => {
       )}
 
       {searchResults.length > 0 && (
-        <div className="search-results">
-          <h3>Search Results</h3>
-          <ul>
+        <div className="search-results" style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          padding: '2.5rem',
+          boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+          maxWidth: '800px',
+          margin: '0 auto'
+        }}>
+          <h3 style={{
+            marginBottom: '1rem',
+            color: '#2c3e50',
+            fontSize: '1.8rem'
+          }}>Search Results</h3>
+          <ul style={{
+            listStyle: 'none',
+            padding: 0
+          }}>
             {searchResults.map((result) => (
-              <li key={result.symbol} onClick={() => navigate(`/stock/${result.symbol}`)}>
-                <span className="symbol">{result.symbol}</span>
+              <li key={result.symbol} 
+                onClick={() => navigate(`/stock/${result.symbol}`)}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  padding: '1rem',
+                  margin: '0.5rem 0',
+                  borderRadius: '8px',
+                  backgroundColor: '#f8f9fa',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#edf2f7'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+              >
+                <span className="symbol" style={{fontWeight: 'bold'}}>{result.symbol}</span>
                 <span className="name">{result.name}</span>
               </li>
             ))}
@@ -187,7 +248,15 @@ const StockSearch = () => {
       )}
 
       {searching && searchResults.length === 0 && !loading && !error && (
-        <div className="no-results">No results found. Please try a different symbol.</div>
+        <div className="no-results" style={{
+          textAlign: 'center',
+          padding: '2rem',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '8px',
+          maxWidth: '800px',
+          margin: '0 auto',
+          color: '#666'
+        }}>No results found. Please try a different symbol.</div>
       )}
     </div>
   );
