@@ -13,7 +13,8 @@ const api = {
   // Get all stocks (simplified list)
   getAllStocks: async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/stocks`);
+      // Append only the specific endpoint, not /api/ again
+      const response = await axios.get(`${API_URL}/stocks`); 
       return response.data;
     } catch (error) {
       console.error('Error fetching stocks:', error);
@@ -24,7 +25,8 @@ const api = {
   // Get detailed info for a specific stock
   getStockDetails: async (symbol) => {
     try {
-      const response = await axios.get(`${API_URL}/api/stocks/${symbol}`);
+      // Append only the specific endpoint, not /api/ again
+      const response = await axios.get(`${API_URL}/stocks/${symbol}`);
       return response.data;
     } catch (error) {
       console.error(`Error fetching details for ${symbol}:`, error);
@@ -35,16 +37,27 @@ const api = {
   // Search for a stock by symbol
   searchStock: async (symbol) => {
     try {
-      const response = await axios.get(`${API_URL}/api/search`, {
+      // Append only the specific endpoint, not /api/ again
+      const response = await axios.get(`${API_URL}/search`, {
         params: { symbol }
       });
       return response.data;
     } catch (error) {
       if (error.response && error.response.status === 404) {
-        return null; // Stock not found
+        // Changed to return specific error message from backend if available
+        return { error: error.response.data.message || `Stock symbol ${symbol} not found` };
+      } 
+      // Handle other errors like API limits (429) or server errors (5xx)
+      else if (error.response) { 
+        console.error('API Error:', error.response.status, error.response.data);
+        return { error: error.response.data.message || 'An API error occurred' };
+      } 
+      // Handle network errors
+      else {
+        console.error('Network Error searching for stock:', error.message);
+        return { error: 'Network error. Please check connection.' };
       }
-      console.error('Error searching for stock:', error);
-      throw error;
+      // Removed the generic throw error here to return structured error info
     }
   }
 };
