@@ -1082,3 +1082,539 @@ body {
     font-size: 1rem;
   }
 }
+
+/* Unavailable metric display */
+.unavailable {
+  font-size: 0.9rem;
+  color: #999;
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.unavailable-icon {
+  font-size: 1rem;
+  color: #777;
+}
+
+/* Enhanced Technical Analysis */
+.trend-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: white;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.current-trend, .current-price {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.trend-label, .price-label {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.trend-value {
+  font-weight: bold;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.trend-value.positive {
+  color: var(--positive);
+}
+
+.trend-value.negative {
+  color: var(--negative);
+}
+
+.trend-value.neutral {
+  color: #888;
+}
+
+.trend-icon {
+  font-size: 1.3rem;
+}
+
+.price-value {
+  font-weight: bold;
+  font-size: 1.2rem;
+  color: var(--primary-color);
+}
+
+/* Indicator Cards */
+.indicator-card {
+  background-color: white;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.indicator-card h5 {
+  font-size: 1rem;
+  color: var(--primary-color);
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* RSI Gauge */
+.indicator-gauge {
+  padding: 0.5rem 0;
+}
+
+.gauge-container {
+  position: relative;
+  height: 35px;
+  margin-bottom: 0.5rem;
+}
+
+.gauge-zones {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.gauge-zone {
+  flex: 1;
+  text-align: center;
+  font-size: 0.7rem;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gauge-zone.oversold {
+  background-color: #3498db;
+}
+
+.gauge-zone.neutral {
+  background-color: #7f8c8d;
+}
+
+.gauge-zone.overbought {
+  background-color: #e74c3c;
+}
+
+.gauge-arrow {
+  position: absolute;
+  top: 10px;
+  transform: translateX(-50%);
+  font-size: 1.2rem;
+  color: var(--primary-color);
+}
+
+.gauge-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #666;
+  padding-top: 0.3rem;
+}
+
+.indicator-value {
+  text-align: center;
+  margin: 0.5rem 0;
+  font-size: 1rem;
+}
+
+.indicator-zone {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.indicator-zone.oversold {
+  background-color: rgba(52, 152, 219, 0.2);
+  color: #3498db;
+}
+
+.indicator-zone.overbought {
+  background-color: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+}
+
+.indicator-zone.neutral {
+  background-color: rgba(127, 140, 141, 0.2);
+  color: #7f8c8d;
+}
+
+.indicator-explanation {
+  padding: 0.5rem;
+  background-color: #f9f9f9;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* Moving Averages Visualization */
+.ma-visualization {
+  padding: 0.5rem 0;
+}
+
+.ma-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.ma-bar-group {
+  display: flex;
+  align-items: center;
+}
+
+.ma-label {
+  width: 70px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.ma-bar {
+  flex: 1;
+  height: 30px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.ma-bar.positive .ma-bar-fill {
+  background-color: var(--positive);
+}
+
+.ma-bar.negative .ma-bar-fill {
+  background-color: var(--negative);
+}
+
+.ma-bar-fill {
+  height: 100%;
+  min-width: 30px;
+}
+
+.ma-bar-value {
+  padding: 0 10px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Volatility Indicator */
+.volatility-indicator {
+  padding: 0.5rem 0;
+}
+
+.volatility-value {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 1rem;
+}
+
+.volatility-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.volatility-label {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.volatility-number {
+  font-weight: bold;
+  font-size: 1.1rem;
+  color: var(--primary-color);
+}
+
+.volatility-level {
+  margin-bottom: 1rem;
+}
+
+.volatility-bars {
+  display: flex;
+  width: 100%;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.volatility-bar {
+  flex: 1;
+  text-align: center;
+  padding: 0.5rem 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  background-color: #f0f0f0;
+  color: #888;
+}
+
+.volatility-bar.active {
+  background-color: var(--primary-light);
+  color: white;
+}
+
+/* Volume Indicator */
+.volume-indicator {
+  padding: 0.5rem 0;
+}
+
+.volume-ratio {
+  margin-bottom: 1rem;
+}
+
+.volume-gauge {
+  width: 100%;
+  height: 10px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 0.3rem;
+}
+
+.volume-fill {
+  height: 100%;
+  background-color: var(--primary-light);
+}
+
+.volume-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.volume-data {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: #555;
+  margin-bottom: 1rem;
+  background-color: #f9f9f9;
+  padding: 0.5rem;
+  border-radius: 5px;
+}
+
+/* Relative Strength Cards */
+.rs-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.rs-card {
+  background-color: white;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.rs-period {
+  font-weight: 500;
+  text-align: center;
+  margin-bottom: 0.8rem;
+  color: var(--primary-color);
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 0.5rem;
+}
+
+.rs-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.rs-ticker, .rs-spy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.rs-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #555;
+}
+
+.rs-bar {
+  height: 25px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.rs-bar.positive .rs-bar-fill {
+  background-color: var(--positive);
+}
+
+.rs-bar.negative .rs-bar-fill {
+  background-color: var(--negative);
+}
+
+.rs-bar-fill {
+  height: 100%;
+  min-width: 30px;
+}
+
+.rs-bar-value {
+  padding: 0 10px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.rs-status {
+  text-align: center;
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0.5rem;
+  border-radius: 5px;
+}
+
+.rs-status.positive {
+  background-color: rgba(39, 174, 96, 0.1);
+  color: var(--positive);
+}
+
+.rs-status.negative {
+  background-color: rgba(231, 76, 60, 0.1);
+  color: var(--negative);
+}
+
+.rs-summary {
+  padding: 0.8rem;
+  background-color: #f9f9f9;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.5;
+  margin-top: 1rem;
+}
+
+/* Enhanced Chart Patterns */
+.pattern-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.pattern-icon {
+  font-size: 1.5rem;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--light-gray);
+  border-radius: 50%;
+}
+
+.pattern-details {
+  flex: 1;
+}
+
+.confidence-bar {
+  width: 100%;
+  height: 8px;
+  background-color: #f0f0f0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0.3rem 0;
+}
+
+.confidence-fill {
+  height: 100%;
+  background-color: var(--primary-light);
+}
+
+.confidence-label {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.confidence-value {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--primary-color);
+}
+
+/* Technical Analysis Help */
+.technical-help {
+  background-color: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-top: 2rem;
+  border-top: 3px solid var(--primary-light);
+}
+
+.technical-help h4 {
+  margin-bottom: 1rem;
+  color: var(--primary-color);
+}
+
+.help-content p {
+  margin-bottom: 1rem;
+  color: #555;
+}
+
+.key-indicators {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.indicator-help {
+  background-color: #f9f9f9;
+  padding: 0.8rem;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  .rs-cards {
+    grid-template-columns: 1fr;
+  }
+  
+  .key-indicators {
+    grid-template-columns: 1fr;
+  }
+  
+  .volume-data {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  
+  .trend-header {
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+}

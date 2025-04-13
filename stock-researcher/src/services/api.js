@@ -59,6 +59,31 @@ const api = {
       }
       // Removed the generic throw error here to return structured error info
     }
+  },
+
+  /**
+   * Get enhanced technical metrics for a stock
+   * @param {string} symbol - The stock symbol
+   * @param {number} lookback - Number of days to look back for calculations
+   * @returns {Promise<Object>} Enhanced technical metrics for the stock
+   */
+  getEnhancedTechnicalMetrics: async (symbol, lookback = 180) => {
+    try {
+      const response = await fetch(`${API_URL}/technical/enhanced/${symbol}?lookback=${lookback}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to fetch enhanced technical metrics for ${symbol}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error(`Error fetching enhanced technical metrics: ${error.message}`);
+      throw {
+        error: error.message,
+        status: error.status || 500
+      };
+    }
   }
 };
 

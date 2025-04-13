@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 import sqlite3
 from bs4 import BeautifulSoup
+import requests_cache
 
 # Load environment variables
 load_dotenv()
@@ -528,11 +529,11 @@ def get_stock_data_from_api(symbol):
             "currentPrice": round(current_price, 2),
             "change": round(change, 2),
             "percentChange": percent_change,
-            "marketCap": overview_data.get("MarketCapitalization", "N/A"),
-            "peRatio": overview_data.get("PERatio", "N/A"),
-            "dividendYield": overview_data.get("DividendYield", "N/A"),
-            "52WeekHigh": overview_data.get("52WeekHigh", "N/A"),
-            "52WeekLow": overview_data.get("52WeekLow", "N/A"),
+            "marketCap": format_value(overview_data.get("MarketCapitalization", "N/A"), is_market_cap=True),
+            "peRatio": format_value(overview_data.get("PERatio", "N/A"), is_ratio=True),
+            "dividendYield": format_value(overview_data.get("DividendYield", "N/A"), is_ratio=True),
+            "52WeekHigh": format_value(overview_data.get("52WeekHigh", "N/A"), is_price=True),
+            "52WeekLow": format_value(overview_data.get("52WeekLow", "N/A"), is_price=True),
             "description": scraped_info.get("description", overview_data.get("Description", "N/A")),
             "sector": scraped_info.get("sector", overview_data.get("Sector", "N/A")),
             "industry": scraped_info.get("industry", overview_data.get("Industry", "N/A")),
@@ -1274,6 +1275,254 @@ def get_combined_data(symbol):
     }
     
     return jsonify(combined_data)
+
+def format_value(value, is_price=False, is_market_cap=False, is_ratio=False):
+    """Format a value based on its type and context"""
+    if value is None or value == "N/A" or value == "":
+        return "N/A"
+    
+    try:
+        # Try to convert to float
+        float_value = float(value)
+        
+        # Format market cap
+        if is_market_cap:
+            if float_value >= 1_000_000_000:
+                return f"{float_value / 1_000_000_000:.2f}B"
+            elif float_value >= 1_000_000:
+                return f"{float_value / 1_000_000:.2f}M"
+            else:
+                return f"{float_value:,.0f}"
+        
+        # Format price values
+        if is_price:
+            return f"{float_value:.2f}"
+        
+        # Format ratios
+        if is_ratio:
+            return f"{float_value:.2f}"
+            
+        # Default number formatting
+        return str(float_value)
+    except (ValueError, TypeError):
+        # Return as is if conversion fails
+        return value
+
+@app.route('/api/technical/enhanced/<symbol>', methods=['GET'])
+def get_enhanced_technical(symbol):
+    """Get enhanced technical metrics for a stock"""
+    try:
+        # Use the cache for historical data requests
+        session = requests_cache.CachedSession('technical_cache', expire_after=3600)
+        
+        # Get query parameters
+        lookback = request.args.get('lookback', '180')  # Default to 180 days
+        try:
+            lookback_days = int(lookback)
+        except ValueError:
+            lookback_days = 180
+            
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=lookback_days)
+        
+        # Fetch stock data from API
+        stock_data, error = get_stock_data_from_api(symbol)
+        if error:
+            return jsonify({"error": error}), 400
+            
+        # Fetch historical data
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={API_KEY}"
+        response = session.get(url)
+        data = response.json()
+        
+        if "Error Message" in data or "Time Series (Daily)" not in data:
+            return jsonify({"error": "Failed to get historical data"}), 400
+            
+        # Convert to DataFrame
+        time_series = data.get("Time Series (Daily)", {})
+        prices_data = []
+        
+        for date, values in time_series.items():
+            date_obj = datetime.strptime(date, "%Y-%m-%d")
+            if date_obj >= start_date and date_obj <= end_date:
+                prices_data.append({
+                    "date": date,
+                    "open": float(values.get("1. open", 0)),
+                    "high": float(values.get("2. high", 0)),
+                    "low": float(values.get("3. low", 0)),
+                    "close": float(values.get("4. close", 0)),
+                    "volume": float(values.get("5. volume", 0))
+                })
+                
+        # Sort by date
+        prices_data.sort(key=lambda x: x["date"])
+        
+        if not prices_data:
+            return jsonify({"error": "Insufficient historical data"}), 400
+            
+        # Convert to DataFrame for easier analysis
+        df = pd.DataFrame(prices_data)
+        
+        # Calculate technical indicators
+        # Calculate Beta (vs S&P 500) if enough data
+        beta = None
+        spy_correlation = None
+        try:
+            # Get SPY data for the same period
+            spy_url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=SPY&outputsize=full&apikey={API_KEY}"
+            spy_response = session.get(spy_url)
+            spy_data = spy_response.json()
+            
+            if "Time Series (Daily)" in spy_data:
+                spy_series = spy_data.get("Time Series (Daily)", {})
+                spy_prices = []
+                
+                for date, values in spy_series.items():
+                    date_obj = datetime.strptime(date, "%Y-%m-%d")
+                    if date_obj >= start_date and date_obj <= end_date:
+                        spy_prices.append({
+                            "date": date,
+                            "close": float(values.get("4. close", 0))
+                        })
+                        
+                # Sort by date
+                spy_prices.sort(key=lambda x: x["date"])
+                spy_df = pd.DataFrame(spy_prices)
+                
+                # Ensure dates match
+                merged_df = pd.merge(df[["date", "close"]], spy_df[["date", "close"]], on="date", suffixes=('_stock', '_spy'))
+                
+                if len(merged_df) > 20:  # Need enough data points for meaningful calculation
+                    # Calculate daily returns
+                    merged_df["stock_return"] = merged_df["close_stock"].pct_change()
+                    merged_df["spy_return"] = merged_df["close_spy"].pct_change()
+                    
+                    # Remove NaN values
+                    merged_df = merged_df.dropna()
+                    
+                    # Calculate beta
+                    covariance = merged_df["stock_return"].cov(merged_df["spy_return"])
+                    spy_variance = merged_df["spy_return"].var()
+                    
+                    if spy_variance > 0:
+                        beta = covariance / spy_variance
+                        
+                    # Calculate correlation
+                    spy_correlation = merged_df["stock_return"].corr(merged_df["spy_return"])
+        except Exception as e:
+            logging.error(f"Error calculating beta for {symbol}: {e}")
+            
+        # Calculate volatility metrics
+        daily_returns = df["close"].pct_change().dropna()
+        volatility = {
+            "daily": daily_returns.std() * 100,  # Daily volatility in percent
+            "annualized": daily_returns.std() * (252 ** 0.5) * 100,  # Annualized volatility
+            "max_drawdown": 0
+        }
+        
+        # Calculate max drawdown
+        if len(df) > 1:
+            rolling_max = df["close"].expanding().max()
+            drawdown = (df["close"] / rolling_max - 1.0) * 100
+            volatility["max_drawdown"] = drawdown.min()
+        
+        # Get additional financial metrics from company overview
+        try:
+            overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={API_KEY}"
+            overview_response = session.get(overview_url)
+            overview_data = overview_response.json()
+            
+            additional_metrics = {
+                "beta": overview_data.get("Beta", beta),
+                "forwardPE": overview_data.get("ForwardPE", "N/A"),
+                "priceToSalesRatio": overview_data.get("PriceToSalesRatioTTM", "N/A"),
+                "priceToBookRatio": overview_data.get("PriceToBookRatio", "N/A"),
+                "evToEBITDA": overview_data.get("EVToEBITDA", "N/A"),
+                "returnOnEquity": overview_data.get("ReturnOnEquityTTM", "N/A"),
+                "profitMargin": overview_data.get("ProfitMargin", "N/A"),
+                "earningsPerShare": overview_data.get("EPS", "N/A"),
+                "dividend": {
+                    "yield": overview_data.get("DividendYield", "N/A"),
+                    "perShare": overview_data.get("DividendPerShare", "N/A"),
+                    "date": overview_data.get("ExDividendDate", "N/A"),
+                    "payoutRatio": overview_data.get("PayoutRatio", "N/A")
+                }
+            }
+        except Exception as e:
+            logging.error(f"Error getting additional metrics for {symbol}: {e}")
+            additional_metrics = {
+                "beta": beta,
+                "dividend": {
+                    "yield": "N/A",
+                    "perShare": "N/A",
+                    "date": "N/A",
+                    "payoutRatio": "N/A"
+                }
+            }
+            
+        # Format all values properly
+        for key in ["beta", "forwardPE", "priceToSalesRatio", "priceToBookRatio", 
+                   "evToEBITDA", "returnOnEquity", "profitMargin", "earningsPerShare"]:
+            if key in additional_metrics:
+                additional_metrics[key] = format_value(additional_metrics[key], is_ratio=True)
+                
+        for key in ["yield", "perShare", "payoutRatio"]:
+            if key in additional_metrics["dividend"]:
+                additional_metrics["dividend"][key] = format_value(additional_metrics["dividend"][key], 
+                                                                 is_ratio=(key in ["yield", "payoutRatio"]),
+                                                                 is_price=(key == "perShare"))
+        
+        # Calculate support and resistance levels
+        if len(df) >= 20:
+            # Simple support/resistance based on recent price action
+            recent_df = df.tail(20)
+            support_level = round(recent_df["low"].min(), 2)
+            resistance_level = round(recent_df["high"].max(), 2)
+            
+            # More sophisticated support/resistance using percentiles
+            support_level2 = round(df["close"].quantile(0.1), 2)
+            resistance_level2 = round(df["close"].quantile(0.9), 2)
+            
+            price_levels = {
+                "support": {
+                    "strong": min(support_level, support_level2),
+                    "weak": max(support_level, support_level2)
+                },
+                "resistance": {
+                    "strong": max(resistance_level, resistance_level2),
+                    "weak": min(resistance_level, resistance_level2)
+                },
+                "current": df["close"].iloc[-1]
+            }
+        else:
+            price_levels = {
+                "support": {"strong": "N/A", "weak": "N/A"},
+                "resistance": {"strong": "N/A", "weak": "N/A"},
+                "current": df["close"].iloc[-1] if len(df) > 0 else "N/A"
+            }
+            
+        # Package the response
+        response_data = {
+            "symbol": symbol,
+            "name": stock_data["name"],
+            "volatility": {
+                "daily": round(volatility["daily"], 2),
+                "annualized": round(volatility["annualized"], 2),
+                "maxDrawdown": round(volatility["max_drawdown"], 2) if volatility["max_drawdown"] != 0 else "N/A"
+            },
+            "marketMetrics": additional_metrics,
+            "spyCorrelation": round(spy_correlation, 2) if spy_correlation is not None else "N/A",
+            "priceLevels": price_levels,
+            "dataPoints": len(df),
+            "dataSource": "Alpha Vantage API"
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logging.error(f"Error getting enhanced technical metrics for {symbol}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     if not API_KEY:
