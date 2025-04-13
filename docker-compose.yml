@@ -4,12 +4,16 @@ services:
   frontend:
     build:
       context: ./stock-researcher
+      # Pass the API URL as a build argument
+      args:
+        REACT_APP_API_URL: http://localhost/api
     ports:
       - "80:80"
     depends_on:
       - backend
-    environment:
-      - REACT_APP_API_URL=http://localhost/api
+    # No longer need runtime environment variable here for React App
+    # environment:
+    #   - REACT_APP_API_URL=http://localhost/api
 
   backend:
     build:

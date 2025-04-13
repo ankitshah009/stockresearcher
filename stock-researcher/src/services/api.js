@@ -1,7 +1,13 @@
 import axios from 'axios';
 
-// Default URL for local development (outside Docker), updated to 5001
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
+// API URL is now set via build-time environment variable
+const API_URL = process.env.REACT_APP_API_URL;
+
+// Add a check in case the variable wasn't set during build
+if (!API_URL) {
+  console.error("FATAL ERROR: REACT_APP_API_URL is not set. Check Docker build configuration.");
+  // You might want to throw an error or render an error state in the app
+}
 
 const api = {
   // Get all stocks (simplified list)
