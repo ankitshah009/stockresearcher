@@ -35,6 +35,10 @@ tiingo_config = {
 }
 tiingo_client = TiingoClient(tiingo_config)
 
+# Initialize Polygon API
+POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '4mopO1RMkcELYJcjLzLDupoPJh_UAGj9')
+POLYGON_BASE_URL = 'https://api.polygon.io'
+
 # In-memory cache to avoid hitting API limits frequently
 cache = {}
 
@@ -305,16 +309,173 @@ def scrape_company_info(symbol):
         logging.error(f"Error scraping company info for {symbol}: {e}")
         return {}
 
+def get_stock_data_from_polygon(symbol):
+    """Fetch stock data from Polygon.io API as fallback when Alpha Vantage and Tiingo fail"""
+    try:
+        logging.info(f"Fetching data for {symbol} from Polygon.io API (second fallback)")
+        
+        # Get ticker details
+        ticker_url = f"{POLYGON_BASE_URL}/v3/reference/tickers/{symbol}?apiKey={POLYGON_API_KEY}"
+        ticker_response = requests.get(ticker_url)
+        ticker_data = ticker_response.json()
+        
+        if "error" in ticker_data or ticker_data.get("status") == "ERROR":
+            logging.error(f"Polygon API error for ticker {symbol}: {ticker_data.get('error')}")
+            return None, f"No data found for symbol: {symbol}"
+            
+        ticker_result = ticker_data.get("results", {})
+        
+        # Get latest price data using Previous Close endpoint
+        price_url = f"{POLYGON_BASE_URL}/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_API_KEY}"
+        price_response = requests.get(price_url)
+        price_data = price_response.json()
+        
+        if "error" in price_data or price_data.get("status") == "ERROR" or not price_data.get("results"):
+            logging.error(f"Polygon API error for price data {symbol}: {price_data.get('error')}")
+            return None, f"No price data found for symbol: {symbol}"
+            
+        latest_price = price_data.get("results")[0]
+        
+        # Get news for the symbol
+        news_url = f"{POLYGON_BASE_URL}/v2/reference/news?ticker={symbol}&limit=5&apiKey={POLYGON_API_KEY}"
+        news_response = requests.get(news_url)
+        news_data = news_response.json()
+        
+        # Scrape additional info from Yahoo Finance
+        scraped_info = scrape_company_info(symbol)
+        
+        # Calculate price change and percentage
+        current_price = latest_price.get("c", 0)  # Close price
+        previous_close = latest_price.get("o", current_price)  # Open price as fallback
+        change = current_price - previous_close
+        percent_change = (change / previous_close) * 100 if previous_close > 0 else 0
+        
+        # Construct stock info
+        stock_info = {
+            "symbol": symbol,
+            "name": ticker_result.get("name", symbol),
+            "currentPrice": round(current_price, 2),
+            "change": round(change, 2),
+            "percentChange": str(round(percent_change, 2)),
+            "marketCap": ticker_result.get("market_cap", "N/A"),
+            "peRatio": "N/A",  # Not directly available from Polygon without calculation
+            "dividendYield": "N/A",  # Not directly available from Polygon without calculation
+            "52WeekHigh": "N/A",  # Would need to calculate from historical data
+            "52WeekLow": "N/A",  # Would need to calculate from historical data
+            "description": scraped_info.get("description") or ticker_result.get("description", "N/A"),
+            "sector": scraped_info.get("sector") or ticker_result.get("sic_description", "N/A"),
+            "industry": scraped_info.get("industry", "N/A"),
+            "dataSource": "Polygon.io API (second fallback)",
+            "sources": {
+                "company": f"https://www.{symbol}.com",
+                "yahoo": f"https://finance.yahoo.com/quote/{symbol}",
+                "marketwatch": f"https://www.marketwatch.com/investing/stock/{symbol}",
+                "sec": f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={symbol}&owner=exclude&action=getcompany"
+            }
+        }
+        
+        # Add news if available
+        if news_data.get("results"):
+            stock_info["latestNews"] = [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("article_url", "")
+                } 
+                for item in news_data.get("results", [])[:3]
+            ]
+        
+        # Save to cache
+        save_to_cache(symbol, stock_info)
+        
+        return stock_info, None
+    except Exception as e:
+        logging.error(f"Error fetching Polygon data for {symbol}: {e}")
+        return None, f"Error fetching stock data from fallback source: {str(e)}"
+
+def get_stock_data_from_tiingo(symbol):
+    """Fetch stock data from Tiingo API as fallback when Alpha Vantage fails"""
+    try:
+        logging.info(f"Fetching data for {symbol} from Tiingo API (fallback)")
+        
+        # Get ticker metadata
+        ticker_metadata = tiingo_client.get_ticker_metadata(symbol)
+        
+        # Get price data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=7)  # Last week of data
+        price_data = tiingo_client.get_ticker_price(
+            ticker=symbol,
+            startDate=start_date.strftime('%Y-%m-%d'),
+            endDate=end_date.strftime('%Y-%m-%d'),
+            frequency='daily'
+        )
+        
+        if not price_data or len(price_data) == 0:
+            logging.error(f"No price data found for {symbol} on Tiingo, trying Polygon")
+            return get_stock_data_from_polygon(symbol)
+            
+        # Get the latest price data
+        latest_price = price_data[-1]
+        current_price = latest_price['close']
+        
+        # If we have at least 2 days of data, calculate change
+        if len(price_data) >= 2:
+            previous_close = price_data[-2]['close']
+            change = current_price - previous_close
+            percent_change = (change / previous_close) * 100
+        else:
+            previous_close = current_price
+            change = 0
+            percent_change = 0
+        
+        # Get company name from ticker metadata
+        company_name = ticker_metadata.get('name', symbol)
+        
+        # Scrape additional info from Yahoo Finance
+        scraped_info = scrape_company_info(symbol)
+        
+        # Construct stock info
+        stock_info = {
+            "symbol": symbol,
+            "name": company_name,
+            "currentPrice": round(current_price, 2),
+            "change": round(change, 2),
+            "percentChange": str(round(percent_change, 2)),
+            "marketCap": ticker_metadata.get("marketCap", "N/A"),
+            "peRatio": "N/A",  # Not directly available from Tiingo
+            "dividendYield": "N/A",  # Not directly available from Tiingo
+            "52WeekHigh": "N/A",  # Would need to calculate from historical data
+            "52WeekLow": "N/A",  # Would need to calculate from historical data
+            "description": scraped_info.get("description", "N/A"),
+            "sector": scraped_info.get("sector", "N/A"),
+            "industry": scraped_info.get("industry", "N/A"),
+            "dataSource": "Tiingo API (Alpha Vantage fallback)",
+            "sources": {
+                "company": f"https://www.{symbol}.com",
+                "yahoo": f"https://finance.yahoo.com/quote/{symbol}",
+                "marketwatch": f"https://www.marketwatch.com/investing/stock/{symbol}",
+                "sec": f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={symbol}&owner=exclude&action=getcompany"
+            }
+        }
+        
+        # Save to cache
+        save_to_cache(symbol, stock_info)
+        
+        return stock_info, None
+    except Exception as e:
+        logging.error(f"Error fetching Tiingo data for {symbol}: {e}, trying Polygon")
+        return get_stock_data_from_polygon(symbol)
+
 def get_stock_data_from_api(symbol):
-    """Fetch stock data from Alpha Vantage API with caching"""
+    """Fetch stock data from Alpha Vantage API with Tiingo and Polygon fallbacks"""
     # Check cache first
     cached_data = get_from_cache(symbol)
     if cached_data:
-        return cached_data
+        return cached_data, None
 
     if not API_KEY:
-        logging.error("ALPHA_VANTAGE_API_KEY is not set")
-        return {"error": "API key is not configured"}
+        logging.warning("ALPHA_VANTAGE_API_KEY is not set, falling back to Tiingo")
+        return get_stock_data_from_tiingo(symbol)
 
     # Global quote endpoint for current price
     url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={API_KEY}"
@@ -325,18 +486,18 @@ def get_stock_data_from_api(symbol):
         
         # Check for error message or empty response
         if "Error Message" in quote_data:
-            logging.error(f"Alpha Vantage API error: {quote_data['Error Message']}")
-            return {"error": f"API Error: {quote_data['Error Message']}"}
+            logging.error(f"Alpha Vantage API error: {quote_data['Error Message']}, falling back to Tiingo")
+            return get_stock_data_from_tiingo(symbol)
             
         # Check for API limit
         if "Note" in quote_data and "API call frequency" in quote_data["Note"]:
-            logging.warning(f"Alpha Vantage API limit reached: {quote_data['Note']}")
-            return {"error": "API rate limit reached. Please try again later."}
+            logging.warning(f"Alpha Vantage API limit reached: {quote_data['Note']}, falling back to Tiingo")
+            return get_stock_data_from_tiingo(symbol)
             
         # Check for empty or incomplete data
         if not quote_data.get("Global Quote", {}).get("05. price"):
-            logging.warning(f"Incomplete data received for {symbol}")
-            return {"error": f"No data found for symbol: {symbol}"}
+            logging.warning(f"Incomplete data received for {symbol} from Alpha Vantage, falling back to Tiingo")
+            return get_stock_data_from_tiingo(symbol)
         
         # Company overview for more details
         overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={API_KEY}"
@@ -345,7 +506,7 @@ def get_stock_data_from_api(symbol):
         
         # Check if overview data is empty (just {})
         if not overview_data or "Symbol" not in overview_data:
-            logging.warning(f"No company overview data for {symbol}")
+            logging.warning(f"No company overview data for {symbol} from Alpha Vantage")
             
         # Extract price data
         quote = quote_data.get("Global Quote", {})
@@ -375,6 +536,7 @@ def get_stock_data_from_api(symbol):
             "description": scraped_info.get("description", overview_data.get("Description", "N/A")),
             "sector": scraped_info.get("sector", overview_data.get("Sector", "N/A")),
             "industry": scraped_info.get("industry", overview_data.get("Industry", "N/A")),
+            "dataSource": "Alpha Vantage API",
             "sources": {
                 "company": f"https://www.{symbol}.com",
                 "yahoo": f"https://finance.yahoo.com/quote/{symbol}",
@@ -386,10 +548,161 @@ def get_stock_data_from_api(symbol):
         # Save to cache
         save_to_cache(symbol, stock_info)
         
-        return stock_info
+        return stock_info, None
     except Exception as e:
-        logging.error(f"Error fetching stock data for {symbol}: {e}")
-        return {"error": f"Error fetching stock data: {str(e)}"}
+        logging.error(f"Error fetching Alpha Vantage data for {symbol}: {e}, falling back to Tiingo")
+        return get_stock_data_from_tiingo(symbol)
+
+def get_polygon_trending_stocks():
+    """Get trending stocks from Polygon.io API"""
+    try:
+        # Use Polygon's most active stocks endpoint
+        url = f"{POLYGON_BASE_URL}/v2/snapshot/locale/us/markets/stocks/gainers?apiKey={POLYGON_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data or data.get("status") == "ERROR" or not data.get("tickers"):
+            logging.error(f"Polygon API error for trending stocks: {data.get('error')}")
+            return []
+            
+        stocks_list = []
+        for ticker in data.get("tickers", [])[:5]:  # Get top 5 gainers
+            symbol = ticker.get("ticker")
+            last_price = ticker.get("day", {}).get("c", 0)  # Close price
+            prev_close = ticker.get("prevDay", {}).get("c", last_price)  # Previous day close
+            change = last_price - prev_close
+            percent_change = (change / prev_close) * 100 if prev_close > 0 else 0
+            
+            stocks_list.append({
+                "symbol": symbol,
+                "name": ticker.get("name", symbol),
+                "currentPrice": round(last_price, 2),
+                "change": round(change, 2),
+                "percentChange": str(round(percent_change, 2)),
+                "dataSource": "Polygon.io API"
+            })
+            
+        return stocks_list
+    except Exception as e:
+        logging.error(f"Error fetching trending stocks from Polygon: {e}")
+        return []
+
+@app.route('/api/stocks', methods=['GET'])
+def get_stocks():
+    """Get a list of trending/popular stocks with Tiingo and Polygon as fallbacks"""
+    # Alpha Vantage free tier doesn't have a direct trending endpoint.
+    # Try Polygon first for trending stocks
+    polygon_stocks = get_polygon_trending_stocks()
+    if polygon_stocks:
+        return jsonify(polygon_stocks)
+    
+    # If Polygon fails, use our predefined list with Tiingo/Alpha Vantage data
+    popular_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'] 
+    stock_list = []
+
+    for symbol in popular_symbols:
+        stock_data, error = get_stock_data_from_api(symbol)
+        if stock_data:
+            stock_list.append({
+                'symbol': stock_data['symbol'],
+                'name': stock_data['name'],
+                'currentPrice': stock_data['currentPrice'],
+                'change': stock_data['change'],
+                'percentChange': stock_data['percentChange'],
+                'dataSource': stock_data.get('dataSource', 'API')
+            })
+            
+    # If we got no data at all (very unlikely with the fallbacks)
+    if not stock_list:
+        return jsonify({'message': 'Failed to fetch trending stocks from all sources.'}), 500
+        
+    return jsonify(stock_list)
+
+@app.route('/api/polygon/aggregates/<symbol>', methods=['GET'])
+def get_polygon_aggregates(symbol):
+    """Get aggregated data from Polygon"""
+    try:
+        # Get query parameters
+        multiplier = request.args.get('multiplier', '1')
+        timespan = request.args.get('timespan', 'day')
+        from_date = request.args.get('from', (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
+        to_date = request.args.get('to', datetime.now().strftime('%Y-%m-%d'))
+        
+        # Call Polygon API
+        url = f"{POLYGON_BASE_URL}/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{from_date}/{to_date}?apiKey={POLYGON_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data or data.get("status") == "ERROR":
+            return jsonify({"error": data.get("error", "Failed to get aggregates")}), 400
+            
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Error getting aggregates for {symbol}: {e}")
+        return jsonify({"error": str(e)}), 500
+        
+@app.route('/api/polygon/news/<symbol>', methods=['GET'])
+def get_polygon_news(symbol):
+    """Get news from Polygon API"""
+    try:
+        # Get query parameters
+        limit = request.args.get('limit', '10')
+        
+        # Call Polygon API
+        url = f"{POLYGON_BASE_URL}/v2/reference/news?ticker={symbol}&limit={limit}&apiKey={POLYGON_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data or data.get("status") == "ERROR":
+            return jsonify({"error": data.get("error", "Failed to get news")}), 400
+            
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Error getting news for {symbol}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/polygon/exchanges', methods=['GET'])
+def get_polygon_exchanges():
+    """Get list of exchanges from Polygon"""
+    try:
+        url = f"{POLYGON_BASE_URL}/v3/reference/exchanges?apiKey={POLYGON_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data or data.get("status") == "ERROR":
+            return jsonify({"error": data.get("error", "Failed to get exchanges")}), 400
+            
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Error getting exchanges: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/polygon/tickers', methods=['GET'])
+def get_polygon_tickers():
+    """Get list of tickers from Polygon"""
+    try:
+        # Get query parameters
+        market = request.args.get('market', 'stocks')
+        limit = request.args.get('limit', '50')
+        search = request.args.get('search', '')
+        active = request.args.get('active', 'true')
+        
+        # Build URL with query parameters
+        url = f"{POLYGON_BASE_URL}/v3/reference/tickers?market={market}&active={active}&limit={limit}&apiKey={POLYGON_API_KEY}"
+        
+        if search:
+            url += f"&search={search}"
+            
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data or data.get("status") == "ERROR":
+            return jsonify({"error": data.get("error", "Failed to get tickers")}), 400
+            
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Error getting tickers: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # --- Routes --- 
 
@@ -444,35 +757,6 @@ def search_stock():
         'change': stock_data['change'],
         'percentChange': stock_data['percentChange']
     })
-
-@app.route('/api/stocks', methods=['GET'])
-def get_stocks():
-    """Get a list of trending/popular stocks (using API for a few)"""
-    # Alpha Vantage free tier doesn't have a direct trending endpoint.
-    # We'll fetch a few predefined popular stocks instead.
-    popular_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'] 
-    stock_list = []
-    errors = []
-
-    for symbol in popular_symbols:
-        stock_data, error = get_stock_data_from_api(symbol)
-        if stock_data:
-            stock_list.append({
-                'symbol': stock_data['symbol'],
-                'name': stock_data['name'],
-                'currentPrice': stock_data['currentPrice'],
-                'change': stock_data['change'],
-                'percentChange': stock_data['percentChange']
-            })
-        elif error:
-            errors.append(f"{symbol}: {error}")
-            
-    if not stock_list and errors:
-        # If all API calls failed, return an error
-        return jsonify({'message': 'Failed to fetch trending stocks.', 'details': errors}), 500
-        
-    # Even if some fail, return the ones that succeeded
-    return jsonify(stock_list)
 
 @app.route('/api/technical-analysis/<symbol>', methods=['GET'])
 def get_technical_analysis(symbol):

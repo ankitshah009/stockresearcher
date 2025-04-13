@@ -203,6 +203,35 @@ const StockDetail = () => {
     const fetchStockData = async () => {
       try {
         const data = await api.getStockDetails(symbol);
+        
+        // Add reliableSources and unreliableSources if they don't exist
+        if (!data.reliableSources && data.sources) {
+          data.reliableSources = Object.entries(data.sources).map(([key, url]) => ({
+            name: key.charAt(0).toUpperCase() + key.slice(1), // Capitalize first letter
+            url: url
+          }));
+        }
+        
+        if (!data.unreliableSources) {
+          data.unreliableSources = [];
+        }
+        
+        // Map 52-week high/low properties
+        if (!data.high52Week && data['52WeekHigh']) {
+          data.high52Week = data['52WeekHigh'];
+        }
+        
+        if (!data.low52Week && data['52WeekLow']) {
+          data.low52Week = data['52WeekLow'];
+        }
+        
+        // Add a summary if it doesn't exist
+        if (!data.summary) {
+          data.summary = `${data.name} (${data.symbol}) is currently trading at $${data.currentPrice}. ` +
+            `The stock has changed by ${data.change >= 0 ? '+' : ''}${data.change} (${data.percentChange}%) recently. ` +
+            `Data source: ${data.dataSource || 'Financial APIs'}`;
+        }
+        
         setStockData(data);
         setLoading(false);
       } catch (err) {
@@ -441,16 +470,20 @@ const StockDetail = () => {
             <p>
               Our AI has analyzed data directly from {stockData.name}'s official sources:
             </p>
-            <ul className="source-list">
-              {stockData.reliableSources.map((source, index) => (
-                <li key={index}>
-                  <a href={source.url} target="_blank" rel="noopener noreferrer">
-                    {source.name}
-                  </a>
-                  <span className="reliability-badge high">High Reliability</span>
-                </li>
-              ))}
-            </ul>
+            {stockData.reliableSources && stockData.reliableSources.length > 0 ? (
+              <ul className="source-list">
+                {stockData.reliableSources.map((source, index) => (
+                  <li key={index}>
+                    <a href={source.url} target="_blank" rel="noopener noreferrer">
+                      {source.name}
+                    </a>
+                    <span className="reliability-badge high">High Reliability</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No reliable sources available.</p>
+            )}
           </div>
         )}
         
@@ -460,14 +493,18 @@ const StockDetail = () => {
             <p>
               We've identified and filtered out these potentially unreliable sources:
             </p>
-            <ul className="filtered-noise">
-              {stockData.unreliableSources.map((source, index) => (
-                <li key={index}>
-                  <span className="source-name">{source.name}</span>
-                  <span className="reliability-badge low">{source.reason}</span>
-                </li>
-              ))}
-            </ul>
+            {stockData.unreliableSources && stockData.unreliableSources.length > 0 ? (
+              <ul className="filtered-noise">
+                {stockData.unreliableSources.map((source, index) => (
+                  <li key={index}>
+                    <span className="source-name">{source.name}</span>
+                    <span className="reliability-badge low">{source.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No unreliable sources identified.</p>
+            )}
           </div>
         )}
       </div>
