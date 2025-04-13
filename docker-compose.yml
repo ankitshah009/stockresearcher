@@ -22,25 +22,11 @@ services:
       context: ./stock-researcher-backend
     ports:
       - "5001:5001"
-    # Pass the API key from the host environment to the container
+    # Pass the API keys from the host environment to the container
     environment:
       - PORT=5001
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
       - TIINGO_API_KEY=0be74c81ad01d25c6b2fa702a38cab425fb0246c
-    networks:
-      - app-network
-    depends_on:
-      - mcp-trader
-
-  mcp-trader:
-    build:
-      context: ./mcp-trader
-      dockerfile: Dockerfile
-    environment:
-      - TIINGO_API_KEY=0be74c81ad01d25c6b2fa702a38cab425fb0246c  # Using the provided API key
-    ports:
-      - "8000:8000"  # Exposed port for HTTP mode
-    command: uv run mcp-trader --http
     networks:
       - app-network
 

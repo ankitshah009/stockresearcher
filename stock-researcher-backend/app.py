@@ -4,6 +4,11 @@ import os
 import requests
 from dotenv import load_dotenv
 import logging
+import json
+from datetime import datetime, timedelta
+import pandas as pd
+import numpy as np
+from tiingo import TiingoClient
 
 # Load environment variables
 load_dotenv()
@@ -17,8 +22,40 @@ logging.basicConfig(level=logging.INFO)
 API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
 BASE_URL = 'https://www.alphavantage.co/query'
 
+# Initialize Tiingo Client
+TIINGO_API_KEY = os.environ.get('TIINGO_API_KEY', '0be74c81ad01d25c6b2fa702a38cab425fb0246c')
+tiingo_config = {
+    'api_key': TIINGO_API_KEY,
+    'session': requests.Session()
+}
+tiingo_client = TiingoClient(tiingo_config)
+
 # In-memory cache to avoid hitting API limits frequently
 cache = {}
+
+# Add a function to convert NumPy types to Python native types
+def convert_to_json_serializable(obj):
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_)):
+        return bool(obj)
+    else:
+        return obj
+
+# Create a custom JSONEncoder to handle NumPy types
+class NumpyJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        try:
+            return convert_to_json_serializable(obj)
+        except:
+            return super(NumpyJSONEncoder, self).default(obj)
+
+# Configure Flask to use the custom JSONEncoder
+app.json_encoder = NumpyJSONEncoder
 
 def get_stock_data_from_api(symbol):
     """Fetches stock data from Alpha Vantage API"""
@@ -214,91 +251,189 @@ def get_stocks():
 
 @app.route('/api/technical-analysis/<symbol>', methods=['GET'])
 def get_technical_analysis(symbol):
-    """Get advanced technical analysis from MCP-trader"""
+    """Get technical analysis data directly from Tiingo API"""
     try:
-        # Call the MCP-trader service for stock analysis
-        response = requests.post(
-            'http://mcp-trader:8000/call-tool',
-            json={
-                "name": "analyze-stock",
-                "arguments": {
-                    "symbol": symbol
-                }
-            },
-            timeout=10
+        # Get historical price data for the last 200 days
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)  # 1 year of data
+        
+        # Fetch historical data from Tiingo
+        historical_data = tiingo_client.get_ticker_price(
+            ticker=symbol,
+            startDate=start_date.strftime('%Y-%m-%d'),
+            endDate=end_date.strftime('%Y-%m-%d'),
+            frequency='daily'
         )
         
-        # Initialize analysis result with default empty structure
+        # Convert to pandas DataFrame for easier analysis
+        df = pd.DataFrame(historical_data)
+        
+        # Calculate technical indicators
+        # Moving Averages
+        df['sma20'] = df['close'].rolling(window=20).mean()
+        df['sma50'] = df['close'].rolling(window=50).mean()
+        df['sma200'] = df['close'].rolling(window=200).mean()
+        
+        # Momentum - RSI (Relative Strength Index)
+        delta = df['close'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # Volatility - ATR (Average True Range)
+        df['tr1'] = abs(df['high'] - df['low'])
+        df['tr2'] = abs(df['high'] - df['close'].shift())
+        df['tr3'] = abs(df['low'] - df['close'].shift())
+        df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+        df['atr'] = df['tr'].rolling(window=14).mean()
+        
+        # Volume analysis
+        df['volume_sma20'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_sma20']
+        
+        # Trend determination
+        current_price = df['close'].iloc[-1]
+        sma20 = df['sma20'].iloc[-1]
+        sma50 = df['sma50'].iloc[-1]
+        sma200 = df['sma200'].iloc[-1]
+        
+        # Determine trend
+        if current_price > sma50 and sma50 > sma200:
+            trend = "Strong Uptrend"
+        elif current_price > sma50:
+            trend = "Uptrend"
+        elif current_price < sma50 and sma50 < sma200:
+            trend = "Strong Downtrend"
+        elif current_price < sma50:
+            trend = "Downtrend"
+        else:
+            trend = "Sideways"
+            
+        # Calculate relative strength vs SPY (S&P 500 ETF)
+        spy_data = tiingo_client.get_ticker_price(
+            ticker='SPY',
+            startDate=start_date.strftime('%Y-%m-%d'),
+            endDate=end_date.strftime('%Y-%m-%d'),
+            frequency='daily'
+        )
+        spy_df = pd.DataFrame(spy_data)
+        
+        # Calculate relative performance over different periods
+        periods = [21, 63, 126, 252]  # Approximately 1 month, 3 months, 6 months, 1 year
+        relative_strength = {}
+        
+        for period in periods:
+            if len(df) >= period and len(spy_df) >= period:
+                # Stock performance
+                stock_start = df['close'].iloc[-period]
+                stock_end = df['close'].iloc[-1]
+                stock_perf = (stock_end / stock_start - 1) * 100
+                
+                # SPY performance
+                spy_start = spy_df['close'].iloc[-period]
+                spy_end = spy_df['close'].iloc[-1]
+                spy_perf = (spy_end / spy_start - 1) * 100
+                
+                # Relative strength
+                rs_value = stock_perf - spy_perf
+                
+                relative_strength[f'{period}_day'] = {
+                    'stock_performance': round(stock_perf, 2),
+                    'spy_performance': round(spy_perf, 2),
+                    'relative_strength': round(rs_value, 2),
+                    'outperforming': rs_value > 0
+                }
+        
+        # Prepare full technical analysis response
+        last_row = df.iloc[-1]
         analysis_result = {
-            "technicalAnalysis": {},
-            "relativeStrength": {},
-            "patterns": [],
-            "volumeProfile": {}
+            "technicalAnalysis": {
+                "price": round(current_price, 2),
+                "trend": trend,
+                "movingAverages": {
+                    "sma20": round(last_row['sma20'], 2) if not pd.isna(last_row['sma20']) else None,
+                    "sma50": round(last_row['sma50'], 2) if not pd.isna(last_row['sma50']) else None,
+                    "sma200": round(last_row['sma200'], 2) if not pd.isna(last_row['sma200']) else None,
+                    "priceVsSMA20": round((current_price / last_row['sma20'] - 1) * 100, 2) if not pd.isna(last_row['sma20']) else None,
+                    "priceVsSMA50": round((current_price / last_row['sma50'] - 1) * 100, 2) if not pd.isna(last_row['sma50']) else None,
+                    "priceVsSMA200": round((current_price / last_row['sma200'] - 1) * 100, 2) if not pd.isna(last_row['sma200']) else None
+                },
+                "momentum": {
+                    "rsi": round(last_row['rsi'], 2) if not pd.isna(last_row['rsi']) else None,
+                    "rsiZone": "Overbought" if last_row['rsi'] > 70 else "Oversold" if last_row['rsi'] < 30 else "Neutral"
+                },
+                "volatility": {
+                    "atr": round(last_row['atr'], 2) if not pd.isna(last_row['atr']) else None,
+                    "atrPercent": round((last_row['atr'] / current_price) * 100, 2) if not pd.isna(last_row['atr']) else None
+                },
+                "volume": {
+                    "current": last_row['volume'],
+                    "average20Day": round(last_row['volume_sma20'], 0) if not pd.isna(last_row['volume_sma20']) else None,
+                    "ratio": round(last_row['volume_ratio'], 2) if not pd.isna(last_row['volume_ratio']) else None
+                }
+            },
+            "relativeStrength": relative_strength,
+            "historicalData": {
+                "dates": [str(date) for date in df.index[-30:].tolist()],
+                "prices": df['close'][-30:].tolist(),
+                "volumes": df['volume'][-30:].tolist()
+            }
         }
         
-        if response.status_code == 200:
-            analysis_result["technicalAnalysis"] = response.json()
+        # Detect support and resistance levels
+        if len(df) > 30:
+            # Simplistic approach - use recent highs and lows
+            recent_df = df[-30:]
             
-            # Call additional MCP tools for more comprehensive analysis
-            try:
-                # Get relative strength data
-                rs_response = requests.post(
-                    'http://mcp-trader:8000/call-tool',
-                    json={
-                        "name": "relative-strength",
-                        "arguments": {
-                            "symbol": symbol,
-                            "benchmark": "SPY"
-                        }
-                    },
-                    timeout=10
-                )
-                if rs_response.status_code == 200:
-                    analysis_result["relativeStrength"] = rs_response.json()
-            except Exception as e:
-                app.logger.warning(f"Error getting relative strength data: {e}")
+            # Find local maxima (resistance) and minima (support)
+            resistance_levels = []
+            support_levels = []
             
-            try:
-                # Get pattern detection data
-                pattern_response = requests.post(
-                    'http://mcp-trader:8000/call-tool',
-                    json={
-                        "name": "detect-patterns",
-                        "arguments": {
-                            "symbol": symbol
-                        }
-                    },
-                    timeout=10
-                )
-                if pattern_response.status_code == 200:
-                    analysis_result["patterns"] = pattern_response.json()
-            except Exception as e:
-                app.logger.warning(f"Error getting pattern detection data: {e}")
-            
-            try:
-                # Get volume profile data
-                volume_response = requests.post(
-                    'http://mcp-trader:8000/call-tool',
-                    json={
-                        "name": "volume-profile",
-                        "arguments": {
-                            "symbol": symbol,
-                            "lookback_days": 60
-                        }
-                    },
-                    timeout=10
-                )
-                if volume_response.status_code == 200:
-                    analysis_result["volumeProfile"] = volume_response.json()
-            except Exception as e:
-                app.logger.warning(f"Error getting volume profile data: {e}")
+            for i in range(1, len(recent_df) - 1):
+                # Potential resistance
+                if recent_df['high'].iloc[i] > recent_df['high'].iloc[i-1] and recent_df['high'].iloc[i] > recent_df['high'].iloc[i+1]:
+                    resistance_levels.append(round(recent_df['high'].iloc[i], 2))
                 
-            return jsonify(analysis_result)
-        else:
-            error_msg = f"Error from MCP-trader: {response.text}"
-            app.logger.error(error_msg)
-            return jsonify({"error": error_msg}), 500
+                # Potential support
+                if recent_df['low'].iloc[i] < recent_df['low'].iloc[i-1] and recent_df['low'].iloc[i] < recent_df['low'].iloc[i+1]:
+                    support_levels.append(round(recent_df['low'].iloc[i], 2))
             
+            # Cluster close levels
+            def cluster_levels(levels, threshold_percent=1.0):
+                if not levels:
+                    return []
+                
+                clustered = []
+                levels.sort()
+                
+                current_cluster = [levels[0]]
+                
+                for level in levels[1:]:
+                    # If this level is within threshold% of the cluster average
+                    cluster_avg = sum(current_cluster) / len(current_cluster)
+                    if abs(level - cluster_avg) / cluster_avg * 100 < threshold_percent:
+                        current_cluster.append(level)
+                    else:
+                        # Start a new cluster
+                        clustered.append(round(sum(current_cluster) / len(current_cluster), 2))
+                        current_cluster = [level]
+                
+                # Add the last cluster
+                if current_cluster:
+                    clustered.append(round(sum(current_cluster) / len(current_cluster), 2))
+                
+                return clustered
+            
+            # Add support and resistance levels to the response
+            analysis_result["supportResistance"] = {
+                "support": cluster_levels(support_levels),
+                "resistance": cluster_levels(resistance_levels)
+            }
+        
+        return jsonify(analysis_result)
     except Exception as e:
         error_msg = f"Error getting technical analysis: {str(e)}"
         app.logger.error(error_msg)
