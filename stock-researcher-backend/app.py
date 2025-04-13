@@ -87,8 +87,10 @@ app.json_encoder = NumpyJSONEncoder
 CACHE_DURATION = 3600  # 1 hour in seconds
 
 # Initialize SQLite database for persistent caching
+DB_PATH = 'stock_data.db'
+
 def init_db():
-    conn = sqlite3.connect('stock_data.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     # Create tables if they don't exist
     c.execute('''
@@ -136,7 +138,7 @@ TECHNICAL_INDICATORS = {
 
 # Cache functions using SQLite
 def get_from_cache(symbol, table='stock_cache'):
-    conn = sqlite3.connect('stock_data.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(f"SELECT data, timestamp FROM {table} WHERE symbol = ?", (symbol,))
     result = c.fetchone()
@@ -151,7 +153,7 @@ def get_from_cache(symbol, table='stock_cache'):
     return None
 
 def save_to_cache(symbol, data, table='stock_cache'):
-    conn = sqlite3.connect('stock_data.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     timestamp = int(time.time())
     c.execute(f"INSERT OR REPLACE INTO {table} (symbol, data, timestamp) VALUES (?, ?, ?)",
@@ -161,7 +163,7 @@ def save_to_cache(symbol, data, table='stock_cache'):
     logging.info(f"Saved {table} data for {symbol} to cache")
 
 def get_technical_indicator(symbol, indicator):
-    conn = sqlite3.connect('stock_data.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT data, timestamp FROM technical_indicators WHERE symbol = ? AND indicator = ?", 
               (symbol, indicator))
@@ -203,7 +205,7 @@ def get_technical_indicator(symbol, indicator):
             return None
             
         # Save to cache
-        conn = sqlite3.connect('stock_data.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         timestamp = int(time.time())
         c.execute("INSERT OR REPLACE INTO technical_indicators (symbol, indicator, data, timestamp) VALUES (?, ?, ?, ?)",
@@ -263,51 +265,227 @@ def get_stock_news(symbol):
         return None
 
 def scrape_company_info(symbol):
-    """Scrape basic company information from Yahoo Finance"""
+    """Scrape additional info from various sources including Yahoo Finance and MarketWatch"""
     try:
-        url = f"https://finance.yahoo.com/quote/{symbol}/profile"
+        # Initialize data dictionary
+        data = {
+            "description": "",
+            "sector": "",
+            "industry": "",
+            "marketCap": "N/A",
+            "peRatio": "N/A", 
+            "high52Week": "N/A",
+            "low52Week": "N/A"
+        }
+        
+        # Try Yahoo Finance first
+        yahoo_data = scrape_from_yahoo(symbol)
+        for key, value in yahoo_data.items():
+            if value and value != "N/A":
+                data[key] = value
+                
+        # If we're still missing data, try MarketWatch as a backup
+        if data["marketCap"] == "N/A" or data["peRatio"] == "N/A" or data["high52Week"] == "N/A":
+            market_watch_data = scrape_from_marketwatch(symbol)
+            for key, value in market_watch_data.items():
+                if (key in data and data[key] == "N/A") and value and value != "N/A":
+                    data[key] = value
+        
+        logging.info(f"Scraped data for {symbol}: Market Cap: {data['marketCap']}, P/E: {data['peRatio']}, 52W High: {data['high52Week']}, 52W Low: {data['low52Week']}")
+        return data
+    except Exception as e:
+        logging.error(f"Error scraping company info for {symbol}: {e}")
+        return {}
+
+def scrape_from_yahoo(symbol):
+    """Scrape data from Yahoo Finance"""
+    try:
+        data = {
+            "description": "",
+            "sector": "",
+            "industry": "",
+            "marketCap": "N/A",
+            "peRatio": "N/A", 
+            "high52Week": "N/A",
+            "low52Week": "N/A"
+        }
+        
+        # Yahoo Finance URL
+        yahoo_url = f"https://finance.yahoo.com/quote/{symbol}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.get(url, headers=headers)
         
+        response = requests.get(yahoo_url, headers=headers, timeout=10)
         if response.status_code != 200:
-            logging.warning(f"Failed to scrape company info for {symbol}: HTTP {response.status_code}")
-            return {}
+            logging.warning(f"Failed to fetch Yahoo Finance data for {symbol}: Status code {response.status_code}")
+            return data
+        
+        soup = BeautifulSoup(response.text, 'lxml')
+        logging.info(f"Successfully fetched Yahoo Finance page for {symbol}")
+        
+        # Try to extract market data using multiple approaches
+        try:
+            # First approach: Look for market cap in the summary table
+            tables = soup.find_all('table')
+            for table in tables:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all('td')
+                    if len(cells) >= 2:
+                        label = cells[0].text.strip()
+                        value = cells[1].text.strip()
+                        
+                        if "Market Cap" in label:
+                            logging.info(f"Found Market Cap for {symbol} (Yahoo): {value}")
+                            data["marketCap"] = value
+                        elif "PE Ratio" in label or "P/E" in label:
+                            logging.info(f"Found P/E Ratio for {symbol} (Yahoo): {value}")
+                            data["peRatio"] = value
+                        elif "52 Week Range" in label or "52-Week Range" in label:
+                            logging.info(f"Found 52 Week Range for {symbol} (Yahoo): {value}")
+                            # Format might be "low - high"
+                            if "-" in value:
+                                parts = value.split("-")
+                                if len(parts) == 2:
+                                    data["low52Week"] = parts[0].strip()
+                                    data["high52Week"] = parts[1].strip()
+                        elif "52-Week High" in label or "52 Week High" in label:
+                            logging.info(f"Found 52 Week High for {symbol} (Yahoo): {value}")
+                            data["high52Week"] = value
+                        elif "52-Week Low" in label or "52 Week Low" in label:
+                            logging.info(f"Found 52 Week Low for {symbol} (Yahoo): {value}")
+                            data["low52Week"] = value
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+            # Second approach: Look for specific data-test attributes
+            for test_id in ["MARKET_CAP-value", "PE_RATIO-value", "FIFTY_TWO_WK_RANGE-value"]:
+                element = soup.find('td', {'data-test': test_id})
+                if element:
+                    value = element.text.strip()
+                    logging.info(f"Found {test_id} for {symbol} (Yahoo): {value}")
+                    
+                    if "MARKET_CAP" in test_id:
+                        data["marketCap"] = value
+                    elif "PE_RATIO" in test_id:
+                        data["peRatio"] = value
+                    elif "FIFTY_TWO_WK_RANGE" in test_id and "-" in value:
+                        parts = value.split("-")
+                        if len(parts) == 2:
+                            data["low52Week"] = parts[0].strip()
+                            data["high52Week"] = parts[1].strip()
+        except Exception as e:
+            logging.warning(f"Error extracting market data for {symbol} from Yahoo Finance: {e}")
         
-        # Extract company description
-        description = ""
-        desc_div = soup.find('section', {'class': 'quote-sub-section Mt(30px)'})
-        if desc_div:
-            p_tags = desc_div.find_all('p')
-            if p_tags:
-                description = p_tags[0].text.strip()
-        
-        # Extract sector and industry
-        sector = ""
-        industry = ""
-        profile_details = soup.find_all('div', {'class': 'asset-profile-container'})
-        if profile_details:
-            spans = profile_details[0].find_all('span')
-            for i, span in enumerate(spans):
-                if "Sector" in span.text:
-                    if i+1 < len(spans):
-                        sector = spans[i+1].text.strip()
-                if "Industry" in span.text:
-                    if i+1 < len(spans):
-                        industry = spans[i+1].text.strip()
-        
-        company_info = {
-            'description': description,
-            'sector': sector,
-            'industry': industry
+        # Try to get description from company profile
+        try:
+            description_section = soup.find('section', {'data-test': 'company-profile'})
+            if description_section:
+                description_p = description_section.find('p')
+                if description_p:
+                    data["description"] = description_p.text.strip()
+                    
+            # Get sector and industry if available
+            sector_span = soup.find('span', string='Sector')
+            if sector_span and sector_span.find_next('span'):
+                data["sector"] = sector_span.find_next('span').text.strip()
+                
+            industry_span = soup.find('span', string='Industry')
+            if industry_span and industry_span.find_next('span'):
+                data["industry"] = industry_span.find_next('span').text.strip()
+        except Exception as e:
+            logging.warning(f"Error extracting company info for {symbol} from Yahoo Finance: {e}")
+            
+        # Format the market cap
+        if data["marketCap"] != "N/A" and data["marketCap"]:
+            # Yahoo formats like "2.68T" or "965.16B"
+            try:
+                if data["marketCap"][-1] == "T":
+                    value = float(data["marketCap"][:-1]) * 1000
+                    data["marketCap"] = f"{value:.2f}B"
+                elif data["marketCap"][-1] == "B":
+                    data["marketCap"] = data["marketCap"][:-1] + "B"
+                elif data["marketCap"][-1] == "M":
+                    data["marketCap"] = data["marketCap"][:-1] + "M"
+            except Exception as e:
+                logging.warning(f"Error formatting market cap for {symbol} from Yahoo Finance: {e}")
+                
+        return data
+    except Exception as e:
+        logging.error(f"Error in Yahoo Finance scraping for {symbol}: {e}")
+        return {}
+
+def scrape_from_marketwatch(symbol):
+    """Scrape data from MarketWatch as a backup source"""
+    try:
+        data = {
+            "description": "",
+            "sector": "",
+            "industry": "",
+            "marketCap": "N/A",
+            "peRatio": "N/A", 
+            "high52Week": "N/A",
+            "low52Week": "N/A"
         }
         
-        return company_info
+        # MarketWatch URL
+        mw_url = f"https://www.marketwatch.com/investing/stock/{symbol}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(mw_url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logging.warning(f"Failed to fetch MarketWatch data for {symbol}: Status code {response.status_code}")
+            return data
+        
+        soup = BeautifulSoup(response.text, 'lxml')
+        logging.info(f"Successfully fetched MarketWatch page for {symbol}")
+        
+        # Extract key stats from MarketWatch
+        try:
+            # Find all the key data points
+            items = soup.find_all('li', class_='kv__item')
+            for item in items:
+                label_el = item.find('small', class_='label')
+                value_el = item.find('span', class_='primary')
+                
+                if label_el and value_el:
+                    label = label_el.text.strip()
+                    value = value_el.text.strip()
+                    
+                    if "Market Cap" in label:
+                        logging.info(f"Found Market Cap for {symbol} (MarketWatch): {value}")
+                        data["marketCap"] = value
+                    elif "P/E Ratio" in label:
+                        logging.info(f"Found P/E Ratio for {symbol} (MarketWatch): {value}")
+                        data["peRatio"] = value
+                    elif "52 Week High" in label:
+                        logging.info(f"Found 52 Week High for {symbol} (MarketWatch): {value}")
+                        data["high52Week"] = value
+                    elif "52 Week Low" in label:
+                        logging.info(f"Found 52 Week Low for {symbol} (MarketWatch): {value}")
+                        data["low52Week"] = value
+        except Exception as e:
+            logging.warning(f"Error extracting market data from MarketWatch for {symbol}: {e}")
+            
+        # Format the market cap
+        if data["marketCap"] != "N/A" and data["marketCap"]:
+            try:
+                # MarketWatch might format as "$2.68T" or "$965.16B"
+                mc = data["marketCap"].replace("$", "")
+                if "T" in mc:
+                    value = float(mc.replace("T", "")) * 1000
+                    data["marketCap"] = f"{value:.2f}B"
+                elif "B" in mc:
+                    data["marketCap"] = mc.replace("B", "") + "B"
+                elif "M" in mc:
+                    data["marketCap"] = mc.replace("M", "") + "M"
+            except Exception as e:
+                logging.warning(f"Error formatting market cap from MarketWatch for {symbol}: {e}")
+                
+        return data
     except Exception as e:
-        logging.error(f"Error scraping company info for {symbol}: {e}")
+        logging.error(f"Error in MarketWatch scraping for {symbol}: {e}")
         return {}
 
 def get_stock_data_from_polygon(symbol):
@@ -337,6 +515,41 @@ def get_stock_data_from_polygon(symbol):
             
         latest_price = price_data.get("results")[0]
         
+        # Get 52-week high and low
+        try:
+            # Get data for the past year
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+            
+            range_url = f"{POLYGON_BASE_URL}/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}?apiKey={POLYGON_API_KEY}"
+            range_response = requests.get(range_url)
+            range_data = range_response.json()
+            
+            if "results" in range_data and range_data["results"]:
+                results = range_data["results"]
+                highs = [result["h"] for result in results if "h" in result]
+                lows = [result["l"] for result in results if "l" in result]
+                
+                if highs:
+                    high_52_week = max(highs)
+                else:
+                    high_52_week = "N/A"
+                    
+                if lows:
+                    low_52_week = min(lows)
+                else:
+                    low_52_week = "N/A"
+            else:
+                high_52_week = "N/A"
+                low_52_week = "N/A"
+        except Exception as e:
+            logging.error(f"Error getting 52-week range from Polygon for {symbol}: {e}")
+            high_52_week = "N/A"
+            low_52_week = "N/A"
+            
+        # Try to get market cap and PE ratio
+        market_cap = ticker_result.get("market_cap", "N/A")
+        
         # Get news for the symbol
         news_url = f"{POLYGON_BASE_URL}/v2/reference/news?ticker={symbol}&limit=5&apiKey={POLYGON_API_KEY}"
         news_response = requests.get(news_url)
@@ -345,6 +558,19 @@ def get_stock_data_from_polygon(symbol):
         # Scrape additional info from Yahoo Finance
         scraped_info = scrape_company_info(symbol)
         
+        # Use market cap from ticker result or scraped data
+        if market_cap == "N/A" or not market_cap:
+            market_cap = scraped_info.get("marketCap", "N/A")
+            
+        # Use PE ratio from scraped data
+        pe_ratio = scraped_info.get("peRatio", "N/A")
+        
+        # Use 52-week high/low from API or scraped data
+        if high_52_week == "N/A":
+            high_52_week = scraped_info.get("high52Week", "N/A")
+        if low_52_week == "N/A":
+            low_52_week = scraped_info.get("low52Week", "N/A")
+            
         # Calculate price change and percentage
         current_price = latest_price.get("c", 0)  # Close price
         previous_close = latest_price.get("o", current_price)  # Open price as fallback
@@ -358,11 +584,11 @@ def get_stock_data_from_polygon(symbol):
             "currentPrice": round(current_price, 2),
             "change": round(change, 2),
             "percentChange": str(round(percent_change, 2)),
-            "marketCap": ticker_result.get("market_cap", "N/A"),
-            "peRatio": "N/A",  # Not directly available from Polygon without calculation
+            "marketCap": market_cap,
+            "peRatio": pe_ratio,
             "dividendYield": "N/A",  # Not directly available from Polygon without calculation
-            "52WeekHigh": "N/A",  # Would need to calculate from historical data
-            "52WeekLow": "N/A",  # Would need to calculate from historical data
+            "52WeekHigh": high_52_week,
+            "52WeekLow": low_52_week,
             "description": scraped_info.get("description") or ticker_result.get("description", "N/A"),
             "sector": scraped_info.get("sector") or ticker_result.get("sic_description", "N/A"),
             "industry": scraped_info.get("industry", "N/A"),
@@ -374,6 +600,20 @@ def get_stock_data_from_polygon(symbol):
                 "sec": f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={symbol}&owner=exclude&action=getcompany"
             }
         }
+        
+        # Format values appropriately
+        if stock_info["marketCap"] and stock_info["marketCap"] != "N/A":
+            stock_info["marketCap"] = format_value(stock_info["marketCap"], is_market_cap=True)
+        if stock_info["peRatio"] and stock_info["peRatio"] != "N/A":
+            stock_info["peRatio"] = format_value(stock_info["peRatio"], is_ratio=True)
+        if stock_info["52WeekHigh"] and stock_info["52WeekHigh"] != "N/A":
+            stock_info["52WeekHigh"] = format_value(stock_info["52WeekHigh"], is_price=True)
+        if stock_info["52WeekLow"] and stock_info["52WeekLow"] != "N/A":
+            stock_info["52WeekLow"] = format_value(stock_info["52WeekLow"], is_price=True)
+            
+        # Make sure we have the high52Week/low52Week properties as well for the frontend
+        stock_info["high52Week"] = stock_info["52WeekHigh"]
+        stock_info["low52Week"] = stock_info["52WeekLow"]
         
         # Add news if available
         if news_data.get("results"):
@@ -394,59 +634,100 @@ def get_stock_data_from_polygon(symbol):
         return None, f"Error fetching stock data from fallback source: {str(e)}"
 
 def get_stock_data_from_tiingo(symbol):
-    """Fetch stock data from Tiingo API as fallback when Alpha Vantage fails"""
+    """Fetch stock data from Tiingo API with Polygon as fallback"""
+    # Check cache first
+    cached_data = get_from_cache(symbol)
+    if cached_data:
+        return cached_data, None
+        
+    if not TIINGO_API_KEY:
+        logging.warning("TIINGO_API_KEY is not set, falling back to Polygon")
+        return get_stock_data_from_polygon(symbol)
+        
+    # Headers for Tiingo API
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Token {TIINGO_API_KEY}'
+    }
+    
+    # URL for Tiingo API
+    url = f"https://api.tiingo.com/tiingo/daily/{symbol}"
+    
     try:
-        logging.info(f"Fetching data for {symbol} from Tiingo API (fallback)")
+        # Get basic info
+        response = requests.get(url, headers=headers)
+        data = response.json()
         
-        # Get ticker metadata
-        ticker_metadata = tiingo_client.get_ticker_metadata(symbol)
-        
-        # Get price data
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=7)  # Last week of data
-        price_data = tiingo_client.get_ticker_price(
-            ticker=symbol,
-            startDate=start_date.strftime('%Y-%m-%d'),
-            endDate=end_date.strftime('%Y-%m-%d'),
-            frequency='daily'
-        )
-        
-        if not price_data or len(price_data) == 0:
-            logging.error(f"No price data found for {symbol} on Tiingo, trying Polygon")
-            return get_stock_data_from_polygon(symbol)
+        # Check for error
+        if 'detail' in data:
+            if 'not found' in data['detail'].lower():
+                return None, f"Symbol {symbol} not found"
+            return None, data['detail']
             
-        # Get the latest price data
-        latest_price = price_data[-1]
-        current_price = latest_price['close']
+        # Get price data
+        prices_url = f"{url}/prices"
+        prices_response = requests.get(prices_url, headers=headers)
+        prices_data = prices_response.json()
         
-        # If we have at least 2 days of data, calculate change
-        if len(price_data) >= 2:
-            previous_close = price_data[-2]['close']
-            change = current_price - previous_close
-            percent_change = (change / previous_close) * 100
-        else:
-            previous_close = current_price
-            change = 0
-            percent_change = 0
+        if not prices_data or isinstance(prices_data, dict) and 'detail' in prices_data:
+            return None, f"No price data available for {symbol}"
+            
+        # Get most recent price data
+        latest_price = prices_data[0]
         
-        # Get company name from ticker metadata
-        company_name = ticker_metadata.get('name', symbol)
+        # Add some info
+        company_name = data.get('name', symbol)
+        current_price = latest_price.get('close', 0)
+        open_price = latest_price.get('open', current_price)
+        prev_close = prices_data[1].get('close', current_price) if len(prices_data) > 1 else current_price
         
-        # Scrape additional info from Yahoo Finance
+        # Calculate change and percent change
+        change = current_price - prev_close
+        percent_change = (change / prev_close * 100) if prev_close > 0 else 0
+        
+        # Get the longest historical data to analyze 52-week high/low
+        try:
+            # Try to get a year of historical data for 52 week calculations
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=365)
+            
+            # Get historical data for 52-week high/low
+            historical_url = f"{url}/prices?startDate={start_date.strftime('%Y-%m-%d')}&endDate={end_date.strftime('%Y-%m-%d')}"
+            historical_response = requests.get(historical_url, headers=headers)
+            historical_data = historical_response.json()
+            
+            if historical_data and len(historical_data) > 20:
+                # Calculate 52-week high and low
+                high_52_week = max(item.get('high', 0) for item in historical_data)
+                low_52_week = min(item.get('low', float('inf')) for item in historical_data if item.get('low', 0) > 0)
+                
+                if high_52_week == 0:
+                    high_52_week = "N/A"
+                if low_52_week == float('inf'):
+                    low_52_week = "N/A"
+            else:
+                high_52_week = "N/A"
+                low_52_week = "N/A"
+        except Exception as e:
+            logging.error(f"Error calculating 52-week high/low: {e}")
+            high_52_week = "N/A"
+            low_52_week = "N/A"
+        
+        # Scrape additional info
         scraped_info = scrape_company_info(symbol)
         
-        # Construct stock info
+        # Construct stock info object with scraped data as fallback
         stock_info = {
             "symbol": symbol,
             "name": company_name,
             "currentPrice": round(current_price, 2),
             "change": round(change, 2),
             "percentChange": str(round(percent_change, 2)),
-            "marketCap": ticker_metadata.get("marketCap", "N/A"),
-            "peRatio": "N/A",  # Not directly available from Tiingo
-            "dividendYield": "N/A",  # Not directly available from Tiingo
-            "52WeekHigh": "N/A",  # Would need to calculate from historical data
-            "52WeekLow": "N/A",  # Would need to calculate from historical data
+            "marketCap": scraped_info.get("marketCap", "N/A"),
+            "peRatio": scraped_info.get("peRatio", "N/A"),
+            "dividendYield": "N/A",
+            "52WeekHigh": high_52_week if high_52_week != "N/A" else scraped_info.get("high52Week", "N/A"),
+            "52WeekLow": low_52_week if low_52_week != "N/A" else scraped_info.get("low52Week", "N/A"),
             "description": scraped_info.get("description", "N/A"),
             "sector": scraped_info.get("sector", "N/A"),
             "industry": scraped_info.get("industry", "N/A"),
@@ -458,6 +739,20 @@ def get_stock_data_from_tiingo(symbol):
                 "sec": f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={symbol}&owner=exclude&action=getcompany"
             }
         }
+        
+        # Format values appropriately
+        if stock_info["marketCap"] and stock_info["marketCap"] != "N/A":
+            stock_info["marketCap"] = format_value(stock_info["marketCap"], is_market_cap=True)
+        if stock_info["peRatio"] and stock_info["peRatio"] != "N/A":
+            stock_info["peRatio"] = format_value(stock_info["peRatio"], is_ratio=True)
+        if stock_info["52WeekHigh"] and stock_info["52WeekHigh"] != "N/A":
+            stock_info["52WeekHigh"] = format_value(stock_info["52WeekHigh"], is_price=True)
+        if stock_info["52WeekLow"] and stock_info["52WeekLow"] != "N/A":
+            stock_info["52WeekLow"] = format_value(stock_info["52WeekLow"], is_price=True)
+            
+        # Make sure we have the high52Week/low52Week properties as well for the frontend
+        stock_info["high52Week"] = stock_info["52WeekHigh"]
+        stock_info["low52Week"] = stock_info["52WeekLow"]
         
         # Save to cache
         save_to_cache(symbol, stock_info)
@@ -707,9 +1002,51 @@ def get_polygon_tickers():
 
 # --- Routes --- 
 
+def clear_cache_for_symbol(symbol):
+    """Clear all cached data for a specific symbol"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Clear from stock_cache
+        cursor.execute("DELETE FROM stock_cache WHERE symbol = ?", (symbol,))
+        # Clear from technical_indicators
+        cursor.execute("DELETE FROM technical_indicators WHERE symbol = ?", (symbol,))
+        # Clear from news_cache
+        cursor.execute("DELETE FROM news_cache WHERE symbol = ?", (symbol,))
+        conn.commit()
+        conn.close()
+        logging.info(f"Successfully cleared all cached data for {symbol}")
+        
+        # Also clear from memory caches
+        if symbol in timed_cache:
+            del timed_cache[symbol]
+        if symbol in cache:
+            del cache[symbol]
+    except Exception as e:
+        logging.error(f"Error clearing cache for {symbol}: {e}")
+
 @app.route('/api/stocks/<symbol>', methods=['GET'])
 def get_stock_detail(symbol):
     """Get detailed info for a specific stock from API"""
+    # Get query parameters
+    clear_cache = request.args.get('clear_cache', 'false').lower() == 'true'
+    use_defaults = request.args.get('use_defaults', 'false').lower() == 'true'
+    
+    # If defaults are explicitly requested, serve them directly
+    if use_defaults:
+        # Forward to default data endpoint
+        default_response = get_default_data(symbol)
+        if isinstance(default_response, tuple):
+            # Error case
+            pass  # Continue with normal flow
+        else:
+            # Success case, return the default data
+            return default_response
+            
+    # Clear cache if requested or always for direct API calls
+    if clear_cache:
+        clear_cache_for_symbol(symbol)
+    
     stock_data, error = get_stock_data_from_api(symbol)
     
     if error:
@@ -718,12 +1055,24 @@ def get_stock_detail(symbol):
             status_code = 404
         elif "API key" in error.lower():
             status_code = 503 # Service Unavailable
-        elif "API limit" in error.lower():
-             status_code = 429 # Too Many Requests
-        return jsonify({'message': error}), status_code
-
+        
+        # Do NOT use default data as fallback unless explicitly requested
+        return jsonify({"error": error}), status_code
+    
     if not stock_data:
-        return jsonify({'message': f'Could not retrieve data for symbol {symbol}'}), 500
+        return jsonify({"error": f"Symbol {symbol} not found"}), 404
+    
+    # No automatic filling of missing data from defaults
+    
+    # Format 52 week data
+    if "52WeekHigh" in stock_data and stock_data["52WeekHigh"] != "N/A":
+        stock_data["high52Week"] = stock_data["52WeekHigh"]
+    if "52WeekLow" in stock_data and stock_data["52WeekLow"] != "N/A":
+        stock_data["low52Week"] = stock_data["52WeekLow"]
+    if "high52Week" in stock_data and stock_data["high52Week"] != "N/A" and "52WeekHigh" not in stock_data:
+        stock_data["52WeekHigh"] = stock_data["high52Week"]
+    if "low52Week" in stock_data and stock_data["low52Week"] != "N/A" and "52WeekLow" not in stock_data:
+        stock_data["52WeekLow"] = stock_data["low52Week"]
     
     return jsonify(stock_data)
 
@@ -1331,60 +1680,107 @@ def get_enhanced_technical(symbol):
         if error:
             return jsonify({"error": error}), 400
             
-        # Fetch historical data
-        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={API_KEY}"
-        response = session.get(url)
-        data = response.json()
-        
-        if "Error Message" in data or "Time Series (Daily)" not in data:
-            return jsonify({"error": "Failed to get historical data"}), 400
+        # Try fetching historical data from Alpha Vantage first
+        hist_data = None
+        alpha_vantage_error = None
+        try:
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={API_KEY}"
+            response = session.get(url)
+            data = response.json()
             
-        # Convert to DataFrame
-        time_series = data.get("Time Series (Daily)", {})
-        prices_data = []
-        
-        for date, values in time_series.items():
-            date_obj = datetime.strptime(date, "%Y-%m-%d")
-            if date_obj >= start_date and date_obj <= end_date:
-                prices_data.append({
-                    "date": date,
-                    "open": float(values.get("1. open", 0)),
-                    "high": float(values.get("2. high", 0)),
-                    "low": float(values.get("3. low", 0)),
-                    "close": float(values.get("4. close", 0)),
-                    "volume": float(values.get("5. volume", 0))
-                })
+            if "Error Message" in data:
+                alpha_vantage_error = data["Error Message"]
+            elif "Note" in data and "API call frequency" in data["Note"]:
+                alpha_vantage_error = data["Note"]
+            elif "Time Series (Daily)" not in data:
+                alpha_vantage_error = "Missing time series data"
+            else:
+                # Convert to usable format
+                time_series = data.get("Time Series (Daily)", {})
+                hist_data = []
                 
-        # Sort by date
-        prices_data.sort(key=lambda x: x["date"])
+                for date, values in time_series.items():
+                    date_obj = datetime.strptime(date, "%Y-%m-%d")
+                    if date_obj >= start_date and date_obj <= end_date:
+                        hist_data.append({
+                            "date": date,
+                            "open": float(values.get("1. open", 0)),
+                            "high": float(values.get("2. high", 0)),
+                            "low": float(values.get("3. low", 0)),
+                            "close": float(values.get("4. close", 0)),
+                            "volume": float(values.get("5. volume", 0))
+                        })
+                
+                # Sort by date
+                hist_data.sort(key=lambda x: x["date"])
+        except Exception as e:
+            alpha_vantage_error = str(e)
+            logging.error(f"Alpha Vantage historical data error for {symbol}: {e}")
         
-        if not prices_data:
+        # If Alpha Vantage failed, try Tiingo as fallback
+        if not hist_data or alpha_vantage_error:
+            logging.info(f"Falling back to Tiingo for historical data for {symbol}")
+            try:
+                # Fetch historical data from Tiingo
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Token {TIINGO_API_KEY}'
+                }
+                
+                tiingo_url = f"https://api.tiingo.com/tiingo/daily/{symbol}/prices?startDate={start_date.strftime('%Y-%m-%d')}&endDate={end_date.strftime('%Y-%m-%d')}"
+                tiingo_response = requests.get(tiingo_url, headers=headers)
+                tiingo_data = tiingo_response.json()
+                
+                if not tiingo_data or 'detail' in tiingo_data:
+                    return jsonify({"error": f"Failed to get historical data: {alpha_vantage_error}"}), 400
+                
+                # Convert to same format as Alpha Vantage data
+                hist_data = []
+                for item in tiingo_data:
+                    hist_data.append({
+                        "date": item.get("date", "").split("T")[0],  # Get just the date part
+                        "open": float(item.get("open", 0)),
+                        "high": float(item.get("high", 0)),
+                        "low": float(item.get("low", 0)),
+                        "close": float(item.get("close", 0)),
+                        "volume": float(item.get("volume", 0))
+                    })
+                
+                # Sort by date
+                hist_data.sort(key=lambda x: x["date"])
+            except Exception as e:
+                logging.error(f"Tiingo historical data error for {symbol}: {e}")
+                return jsonify({"error": f"Failed to get historical data from all sources: {e}"}), 400
+        
+        if not hist_data or len(hist_data) < 20:  # Need at least 20 data points
             return jsonify({"error": "Insufficient historical data"}), 400
             
         # Convert to DataFrame for easier analysis
-        df = pd.DataFrame(prices_data)
+        df = pd.DataFrame(hist_data)
         
         # Calculate technical indicators
         # Calculate Beta (vs S&P 500) if enough data
         beta = None
         spy_correlation = None
         try:
-            # Get SPY data for the same period
-            spy_url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=SPY&outputsize=full&apikey={API_KEY}"
-            spy_response = session.get(spy_url)
+            # Try to get SPY data for the same period from Tiingo which is more reliable
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Token {TIINGO_API_KEY}'
+            }
+            
+            spy_url = f"https://api.tiingo.com/tiingo/daily/SPY/prices?startDate={start_date.strftime('%Y-%m-%d')}&endDate={end_date.strftime('%Y-%m-%d')}"
+            spy_response = requests.get(spy_url, headers=headers)
             spy_data = spy_response.json()
             
-            if "Time Series (Daily)" in spy_data:
-                spy_series = spy_data.get("Time Series (Daily)", {})
+            if spy_data and not isinstance(spy_data, dict):
                 spy_prices = []
                 
-                for date, values in spy_series.items():
-                    date_obj = datetime.strptime(date, "%Y-%m-%d")
-                    if date_obj >= start_date and date_obj <= end_date:
-                        spy_prices.append({
-                            "date": date,
-                            "close": float(values.get("4. close", 0))
-                        })
+                for item in spy_data:
+                    spy_prices.append({
+                        "date": item.get("date", "").split("T")[0],  # Get just the date part
+                        "close": float(item.get("close", 0))
+                    })
                         
                 # Sort by date
                 spy_prices.sort(key=lambda x: x["date"])
@@ -1427,95 +1823,38 @@ def get_enhanced_technical(symbol):
             drawdown = (df["close"] / rolling_max - 1.0) * 100
             volatility["max_drawdown"] = drawdown.min()
         
-        # Get additional financial metrics from company overview
-        try:
-            overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={API_KEY}"
-            overview_response = session.get(overview_url)
-            overview_data = overview_response.json()
-            
-            additional_metrics = {
-                "beta": overview_data.get("Beta", beta),
-                "forwardPE": overview_data.get("ForwardPE", "N/A"),
-                "priceToSalesRatio": overview_data.get("PriceToSalesRatioTTM", "N/A"),
-                "priceToBookRatio": overview_data.get("PriceToBookRatio", "N/A"),
-                "evToEBITDA": overview_data.get("EVToEBITDA", "N/A"),
-                "returnOnEquity": overview_data.get("ReturnOnEquityTTM", "N/A"),
-                "profitMargin": overview_data.get("ProfitMargin", "N/A"),
-                "earningsPerShare": overview_data.get("EPS", "N/A"),
-                "dividend": {
-                    "yield": overview_data.get("DividendYield", "N/A"),
-                    "perShare": overview_data.get("DividendPerShare", "N/A"),
-                    "date": overview_data.get("ExDividendDate", "N/A"),
-                    "payoutRatio": overview_data.get("PayoutRatio", "N/A")
-                }
-            }
-        except Exception as e:
-            logging.error(f"Error getting additional metrics for {symbol}: {e}")
-            additional_metrics = {
-                "beta": beta,
-                "dividend": {
-                    "yield": "N/A",
-                    "perShare": "N/A",
-                    "date": "N/A",
-                    "payoutRatio": "N/A"
-                }
-            }
-            
-        # Format all values properly
-        for key in ["beta", "forwardPE", "priceToSalesRatio", "priceToBookRatio", 
-                   "evToEBITDA", "returnOnEquity", "profitMargin", "earningsPerShare"]:
-            if key in additional_metrics:
-                additional_metrics[key] = format_value(additional_metrics[key], is_ratio=True)
-                
-        for key in ["yield", "perShare", "payoutRatio"]:
-            if key in additional_metrics["dividend"]:
-                additional_metrics["dividend"][key] = format_value(additional_metrics["dividend"][key], 
-                                                                 is_ratio=(key in ["yield", "payoutRatio"]),
-                                                                 is_price=(key == "perShare"))
-        
-        # Calculate support and resistance levels
-        if len(df) >= 20:
-            # Simple support/resistance based on recent price action
-            recent_df = df.tail(20)
-            support_level = round(recent_df["low"].min(), 2)
-            resistance_level = round(recent_df["high"].max(), 2)
-            
-            # More sophisticated support/resistance using percentiles
-            support_level2 = round(df["close"].quantile(0.1), 2)
-            resistance_level2 = round(df["close"].quantile(0.9), 2)
-            
-            price_levels = {
-                "support": {
-                    "strong": min(support_level, support_level2),
-                    "weak": max(support_level, support_level2)
-                },
-                "resistance": {
-                    "strong": max(resistance_level, resistance_level2),
-                    "weak": min(resistance_level, resistance_level2)
-                },
-                "current": df["close"].iloc[-1]
-            }
-        else:
-            price_levels = {
-                "support": {"strong": "N/A", "weak": "N/A"},
-                "resistance": {"strong": "N/A", "weak": "N/A"},
-                "current": df["close"].iloc[-1] if len(df) > 0 else "N/A"
-            }
-            
-        # Package the response
+        # Package the response with the data we have
         response_data = {
             "symbol": symbol,
-            "name": stock_data["name"],
+            "name": stock_data.get("name", symbol),
             "volatility": {
                 "daily": round(volatility["daily"], 2),
                 "annualized": round(volatility["annualized"], 2),
                 "maxDrawdown": round(volatility["max_drawdown"], 2) if volatility["max_drawdown"] != 0 else "N/A"
             },
-            "marketMetrics": additional_metrics,
+            "marketMetrics": {
+                "beta": format_value(beta, is_ratio=True) if beta is not None else "N/A",
+                "dividend": {
+                    "yield": stock_data.get("dividendYield", "N/A"),
+                    "perShare": "N/A",
+                    "date": "N/A",
+                    "payoutRatio": "N/A"
+                }
+            },
             "spyCorrelation": round(spy_correlation, 2) if spy_correlation is not None else "N/A",
-            "priceLevels": price_levels,
+            "priceLevels": {
+                "support": {
+                    "strong": round(df["low"].min(), 2),
+                    "weak": round(df["close"].quantile(0.1), 2) if len(df) >= 10 else "N/A"
+                },
+                "resistance": {
+                    "strong": round(df["high"].max(), 2),
+                    "weak": round(df["close"].quantile(0.9), 2) if len(df) >= 10 else "N/A"
+                },
+                "current": round(df["close"].iloc[-1], 2) if len(df) > 0 else "N/A"
+            },
             "dataPoints": len(df),
-            "dataSource": "Alpha Vantage API"
+            "dataSource": "Tiingo API" if alpha_vantage_error else "Alpha Vantage API"
         }
         
         return jsonify(response_data)
@@ -1523,6 +1862,108 @@ def get_enhanced_technical(symbol):
     except Exception as e:
         logging.error(f"Error getting enhanced technical metrics for {symbol}: {e}")
         return jsonify({"error": str(e)}), 500
+
+# Add required imports at the top of the file
+try:
+    import google.genai as genai
+except ImportError:
+    print("Google Genai library not found. Installing...")
+    import subprocess
+    subprocess.check_call(["pip", "install", "--upgrade", "google-genai"])
+    import google.genai as genai
+
+# Gemini API key configuration
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AIzaSyCfm2xX5Lsnpcq18u4Hzv3zbbXkEFbHn44')
+
+@app.route('/api/ai-analysis/<symbol>', methods=['GET'])
+def get_ai_analysis(symbol):
+    """Use Gemini API to analyze stock data and provide insights"""
+    try:
+        # Get stock data from our API
+        stock_data, error = get_stock_data_from_api(symbol)
+        if error:
+            return jsonify({"error": f"Failed to get stock data: {error}"}), 400
+        
+        # Prepare prompt for Gemini
+        prompt = f"""
+        You are a professional stock analyst providing insights on {symbol} ({stock_data.get('name', '')}).
+        
+        Here's the current stock data:
+        - Current Price: ${stock_data.get('currentPrice', 'N/A')}
+        - Market Cap: {stock_data.get('marketCap', 'N/A')}
+        - P/E Ratio: {stock_data.get('peRatio', 'N/A')}
+        - 52 Week High: ${stock_data.get('52WeekHigh', 'N/A')}
+        - 52 Week Low: ${stock_data.get('52WeekLow', 'N/A')}
+        - Sector: {stock_data.get('sector', 'N/A')}
+        - Industry: {stock_data.get('industry', 'N/A')}
+        
+        Based on this information, please provide:
+        1. A summary of the company's current situation
+        2. Technical analysis insights
+        3. Key strengths and risks
+        4. A short-term outlook (1-3 months)
+        
+        Format your response as a professional analyst report with clear sections.
+        Include numerical data when relevant, and make specific observations about price levels, trend direction, and comparative performance.
+        Keep your analysis concise and data-driven, focusing on the most important insights an investor should know.
+        """
+        
+        # Call Gemini API using direct API requests
+        logging.info(f"Calling Gemini API for AI analysis of {symbol}")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+        }
+        
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.8,
+                "topK": 40,
+                "maxOutputTokens": 1024
+            }
+        }
+        
+        gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+        gemini_response = requests.post(
+            gemini_url,
+            headers=headers,
+            json=payload
+        )
+        
+        if gemini_response.status_code != 200:
+            logging.error(f"Gemini API error: {gemini_response.text}")
+            return jsonify({"error": f"AI analysis failed: {gemini_response.text}"}), 500
+        
+        response_data = gemini_response.json()
+        if not response_data.get("candidates") or not response_data["candidates"][0].get("content"):
+            return jsonify({"error": "Empty response from AI model"}), 500
+        
+        analysis_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
+        
+        # Package the response
+        return jsonify({
+            "symbol": symbol,
+            "name": stock_data.get("name", symbol),
+            "analysis": analysis_text,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "dataSource": "Gemini AI"
+        })
+        
+    except Exception as e:
+        logging.error(f"Error generating AI analysis for {symbol}: {e}")
+        return jsonify({"error": f"AI analysis error: {str(e)}"}), 500
+
+@app.route('/api/default-data/<symbol>', methods=['GET'])
+def get_default_data(symbol):
+    # ... existing code ...
+    pass
 
 if __name__ == '__main__':
     if not API_KEY:

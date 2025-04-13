@@ -84,106 +84,112 @@ const Home = () => {
 };
 
 const StockSearch = () => {
-  const [ticker, setTicker] = useState('');
-  const [searchResults, setSearchResults] = useState(null);
+  const [symbol, setSymbol] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [recentSearches, setRecentSearches] = useState(() => {
-    const saved = localStorage.getItem('recentSearches');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [searching, setSearching] = useState(false);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    localStorage.setItem('recentSearches', JSON.stringify(recentSearches));
-  }, [recentSearches]);
-
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!ticker) return;
+  const handleSearch = async () => {
+    if (!symbol.trim()) return;
     
+    setSearching(true);
     setLoading(true);
     setError(null);
     
     try {
-      const result = await api.searchStock(ticker);
-      setSearchResults(result);
+      const response = await fetch(`/api/search?symbol=${symbol.trim()}`);
       
-      // Add to recent searches
-      if (result) {
-        const newSearch = {
-          symbol: result.symbol,
-          name: result.name
-        };
+      if (!response.ok) {
+        const errorData = await response.json();
+        let errorMessage = errorData.error || errorData.message || 'Failed to search for stock';
         
-        setRecentSearches(prev => {
-          const filtered = prev.filter(item => item.symbol !== newSearch.symbol);
-          return [newSearch, ...filtered].slice(0, 5);
-        });
+        // Check if it's an API rate limit issue
+        if (errorMessage.includes('request allocation') || errorMessage.includes('rate limit')) {
+          errorMessage = 'API rate limit reached. Would you like to use default data instead?';
+          setError({ message: errorMessage, useDefaults: true });
+        } else {
+          setError({ message: errorMessage });
+        }
+        setSearchResults([]);
+      } else {
+        const data = await response.json();
+        setSearchResults(data);
       }
     } catch (err) {
-      setError('Error searching for stock. Please try again.');
-      console.error(err);
+      console.error('Error during search:', err);
+      setError({ message: 'An error occurred while searching. Please try again later.' });
+      setSearchResults([]);
     } finally {
       setLoading(false);
     }
   };
-  
-  const handleRecentSearch = (symbol) => {
-    setTicker(symbol);
-    handleSearch({ preventDefault: () => {} });
+
+  const handleUseDefaults = () => {
+    // Navigate to the stock details with use_defaults parameter
+    if (symbol.trim()) {
+      navigate(`/stock/${symbol.trim()}?use_defaults=true`);
+    }
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
   };
 
   return (
-    <div className="stock-search-container">
-      <h2>Search for a Stock</h2>
-      <form onSubmit={handleSearch} className="search-form">
+    <div className="stock-search">
+      <div className="search-container">
         <input
           type="text"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-          placeholder="Enter stock ticker (e.g., AAPL)"
           className="search-input"
+          placeholder="Enter stock symbol (e.g., AAPL)"
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+          onKeyPress={handleKeyPress}
         />
-        <button type="submit" className="search-button" disabled={loading}>
-          {loading ? 'Searching...' : 'Search'}
+        <button
+          className="search-button"
+          onClick={handleSearch}
+          disabled={loading || !symbol.trim()}
+        >
+          {loading ? (
+            <div className="spinner-small"></div>
+          ) : (
+            <span>Search</span>
+          )}
         </button>
-      </form>
+      </div>
 
-      {error && <div className="error-message">{error}</div>}
-      
-      {recentSearches.length > 0 && !searchResults && (
-        <div className="recent-searches">
-          <h3>Recent Searches</h3>
-          <div className="recent-searches-list">
-            {recentSearches.map((item, index) => (
-              <div 
-                key={index} 
-                className="recent-search-item" 
-                onClick={() => handleRecentSearch(item.symbol)}
-              >
-                <span className="recent-symbol">{item.symbol}</span>
-                <span className="recent-name">{item.name}</span>
-              </div>
-            ))}
-          </div>
+      {error && (
+        <div className="error-container">
+          <p className="error-message">{error.message}</p>
+          {error.useDefaults && (
+            <button className="default-data-button" onClick={handleUseDefaults}>
+              Use Default Data
+            </button>
+          )}
         </div>
       )}
 
-      {searchResults && (
+      {searchResults.length > 0 && (
         <div className="search-results">
-          <h3>{searchResults.name}</h3>
-          <div className="stock-price">
-            <span className="current-price">${searchResults.currentPrice}</span>
-            <span className={`price-change ${searchResults.change >= 0 ? 'positive' : 'negative'}`}>
-              {searchResults.change >= 0 ? '+' : ''}{searchResults.change} ({searchResults.percentChange}%)
-            </span>
-          </div>
-          <div className="action-buttons">
-            <Link to={`/stock/${searchResults.symbol}`} className="view-analysis-btn">
-              View Detailed Analysis
-            </Link>
-          </div>
+          <h3>Search Results</h3>
+          <ul>
+            {searchResults.map((result) => (
+              <li key={result.symbol} onClick={() => navigate(`/stock/${result.symbol}`)}>
+                <span className="symbol">{result.symbol}</span>
+                <span className="name">{result.name}</span>
+              </li>
+            ))}
+          </ul>
         </div>
+      )}
+
+      {searching && searchResults.length === 0 && !loading && !error && (
+        <div className="no-results">No results found. Please try a different symbol.</div>
       )}
     </div>
   );
@@ -195,15 +201,18 @@ const StockDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('analysis');
-  const [technicalData, setTechnicalData] = useState(null);
-  const [technicalLoading, setTechnicalLoading] = useState(false);
-  const [technicalError, setTechnicalError] = useState(null);
+  const [technicalAnalysis, setTechnicalAnalysis] = useState(null);
+  const [techLoading, setTechLoading] = useState(false);
+  const [techError, setTechError] = useState(null);
   const [newsData, setNewsData] = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState(null);
   const [enhancedMetrics, setEnhancedMetrics] = useState(null);
   const [enhancedLoading, setEnhancedLoading] = useState(false);
   const [enhancedError, setEnhancedError] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
   
   useEffect(() => {
     const fetchStockData = async () => {
@@ -222,13 +231,21 @@ const StockDetail = () => {
           data.unreliableSources = [];
         }
         
-        // Map 52-week high/low properties
-        if (!data.high52Week && data['52WeekHigh']) {
-          data.high52Week = data['52WeekHigh'];
+        // Map 52-week high/low properties to ensure both naming styles work
+        if (data["52WeekHigh"] && !data.high52Week) {
+          data.high52Week = data["52WeekHigh"];
         }
         
-        if (!data.low52Week && data['52WeekLow']) {
-          data.low52Week = data['52WeekLow'];
+        if (data["52WeekLow"] && !data.low52Week) {
+          data.low52Week = data["52WeekLow"];
+        }
+        
+        if (data.high52Week && !data["52WeekHigh"]) {
+          data["52WeekHigh"] = data.high52Week;
+        }
+        
+        if (data.low52Week && !data["52WeekLow"]) {
+          data["52WeekLow"] = data.low52Week;
         }
         
         // Add a summary if it doesn't exist
@@ -253,27 +270,27 @@ const StockDetail = () => {
   // Fetch technical analysis data when stockData changes
   useEffect(() => {
     if (stockData && stockData.symbol) {
-      fetchTechnicalData(stockData.symbol);
+      fetchTechnicalAnalysis(stockData.symbol);
       fetchNewsData(stockData.symbol);
     }
   }, [stockData]);
   
   // Function to fetch technical analysis data
-  const fetchTechnicalData = async (symbol) => {
-    setTechnicalLoading(true);
-    setTechnicalError(null);
+  const fetchTechnicalAnalysis = async (symbol) => {
+    setTechLoading(true);
+    setTechError(null);
     try {
       const response = await fetch(`/api/technical-analysis/${symbol}`);
       if (!response.ok) {
         throw new Error('Failed to fetch technical data');
       }
       const data = await response.json();
-      setTechnicalData(data);
+      setTechnicalAnalysis(data);
     } catch (error) {
       console.error('Error fetching technical data:', error);
-      setTechnicalError(error.message);
+      setTechError(error.message);
     } finally {
-      setTechnicalLoading(false);
+      setTechLoading(false);
     }
   };
 
@@ -315,8 +332,12 @@ const StockDetail = () => {
     }
   };
 
+  // Update the useEffect to handle fetching AI analysis when tab changes
   useEffect(() => {
-    // Fetch enhanced technical metrics when the analysis tab is active
+    if (activeTab === 'technical' && !technicalAnalysis && !techLoading) {
+      fetchTechnicalAnalysis();
+    }
+    
     if (activeTab === 'analysis' && stockData && !enhancedMetrics && !enhancedLoading) {
       const fetchEnhancedMetrics = async () => {
         setEnhancedLoading(true);
@@ -334,7 +355,35 @@ const StockDetail = () => {
       
       fetchEnhancedMetrics();
     }
-  }, [activeTab, stockData, symbol, enhancedMetrics, enhancedLoading]);
+    
+    if (activeTab === 'ai-analysis' && stockData && !aiAnalysis && !aiLoading) {
+      fetchAiAnalysis();
+    }
+  }, [activeTab, stockData, symbol, technicalAnalysis, techLoading, enhancedMetrics, enhancedLoading, aiAnalysis, aiLoading]);
+
+  // Add function to fetch AI analysis
+  const fetchAiAnalysis = async () => {
+    if (!aiAnalysis && !aiLoading) {
+      setAiLoading(true);
+      setAiError(null);
+      
+      try {
+        const response = await fetch(`/api/ai-analysis/${symbol}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch AI analysis');
+        }
+        
+        const data = await response.json();
+        setAiAnalysis(data);
+      } catch (err) {
+        console.error('Error fetching AI analysis:', err);
+        setAiError(err.message);
+      } finally {
+        setAiLoading(false);
+      }
+    }
+  };
 
   if (loading) {
     return <div className="loading">Loading stock details...</div>;
@@ -396,8 +445,8 @@ const StockDetail = () => {
           <div className="metric">
             <span className="label">52-Week High</span>
             <span className="value">
-              {stockData.high52Week && stockData.high52Week !== "N/A" 
-                ? `$${stockData.high52Week}` 
+              {(stockData.high52Week && stockData.high52Week !== "N/A") || (stockData["52WeekHigh"] && stockData["52WeekHigh"] !== "N/A")
+                ? `$${stockData.high52Week || stockData["52WeekHigh"]}` 
                 : (
                   <span className="unavailable">
                     <span className="unavailable-icon">ⓘ</span>
@@ -410,8 +459,8 @@ const StockDetail = () => {
           <div className="metric">
             <span className="label">52-Week Low</span>
             <span className="value">
-              {stockData.low52Week && stockData.low52Week !== "N/A" 
-                ? `$${stockData.low52Week}` 
+              {(stockData.low52Week && stockData.low52Week !== "N/A") || (stockData["52WeekLow"] && stockData["52WeekLow"] !== "N/A")
+                ? `$${stockData.low52Week || stockData["52WeekLow"]}` 
                 : (
                   <span className="unavailable">
                     <span className="unavailable-icon">ⓘ</span>
@@ -461,6 +510,12 @@ const StockDetail = () => {
         >
           Filtered Noise
         </div>
+        <div 
+          className={`tab ${activeTab === 'ai-analysis' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('ai-analysis')}
+        >
+          AI Analysis
+        </div>
       </div>
       
       <div className="tab-content">
@@ -495,14 +550,14 @@ const StockDetail = () => {
         {activeTab === 'technical' && (
           <div className="technical-tab">
             <h3>Advanced Technical Analysis</h3>
-            {technicalLoading ? (
+            {techLoading ? (
               <div className="loading-spinner">Loading technical analysis...</div>
-            ) : technicalError ? (
-              <div className="error-message">Error: {technicalError}</div>
-            ) : technicalData ? (
+            ) : techError ? (
+              <div className="error-message">Error: {techError}</div>
+            ) : technicalAnalysis ? (
               <div className="technical-analysis">
                 {/* Technical Analysis Summary */}
-                {technicalData.technicalAnalysis && (
+                {technicalAnalysis.technicalAnalysis && (
                   <div className="trend-summary">
                     <h4>Trend Analysis</h4>
                     
@@ -510,21 +565,21 @@ const StockDetail = () => {
                     <div className="trend-header">
                       <div className="current-trend">
                         <span className="trend-label">Current Trend:</span>
-                        <span className={`trend-value ${technicalData.technicalAnalysis.trend === "Uptrend" ? "positive" : technicalData.technicalAnalysis.trend === "Downtrend" ? "negative" : "neutral"}`}>
-                          {technicalData.technicalAnalysis.trend}
-                          {technicalData.technicalAnalysis.trend === "Uptrend" && <span className="trend-icon">↗</span>}
-                          {technicalData.technicalAnalysis.trend === "Downtrend" && <span className="trend-icon">↘</span>}
-                          {technicalData.technicalAnalysis.trend === "Sideways" && <span className="trend-icon">↔</span>}
+                        <span className={`trend-value ${technicalAnalysis.technicalAnalysis.trend === "Uptrend" ? "positive" : technicalAnalysis.technicalAnalysis.trend === "Downtrend" ? "negative" : "neutral"}`}>
+                          {technicalAnalysis.technicalAnalysis.trend}
+                          {technicalAnalysis.technicalAnalysis.trend === "Uptrend" && <span className="trend-icon">↗</span>}
+                          {technicalAnalysis.technicalAnalysis.trend === "Downtrend" && <span className="trend-icon">↘</span>}
+                          {technicalAnalysis.technicalAnalysis.trend === "Sideways" && <span className="trend-icon">↔</span>}
                         </span>
                       </div>
                       <div className="current-price">
                         <span className="price-label">Current Price:</span>
-                        <span className="price-value">${technicalData.technicalAnalysis.price}</span>
+                        <span className="price-value">${technicalAnalysis.technicalAnalysis.price}</span>
                       </div>
                     </div>
                     
                     {/* RSI Indicator with Gauge */}
-                    {technicalData.technicalAnalysis.momentum && (
+                    {technicalAnalysis.technicalAnalysis.momentum && (
                       <div className="indicator-card">
                         <h5>RSI Indicator</h5>
                         <div className="indicator-gauge">
@@ -534,7 +589,7 @@ const StockDetail = () => {
                               <div className="gauge-zone neutral">Neutral</div>
                               <div className="gauge-zone overbought">Overbought</div>
                             </div>
-                            <div className="gauge-arrow" style={{ left: `${Math.min(Math.max(technicalData.technicalAnalysis.momentum.rsi, 0), 100)}%` }}>▼</div>
+                            <div className="gauge-arrow" style={{ left: `${Math.min(Math.max(technicalAnalysis.technicalAnalysis.momentum.rsi, 0), 100)}%` }}>▼</div>
                             <div className="gauge-labels">
                               <span>0</span>
                               <span>30</span>
@@ -543,90 +598,90 @@ const StockDetail = () => {
                             </div>
                           </div>
                           <div className="indicator-value">
-                            RSI: <strong>{technicalData.technicalAnalysis.momentum.rsi.toFixed(1)}</strong> 
-                            <span className={`indicator-zone ${technicalData.technicalAnalysis.momentum.rsiZone.toLowerCase()}`}>
-                              ({technicalData.technicalAnalysis.momentum.rsiZone})
+                            RSI: <strong>{technicalAnalysis.technicalAnalysis.momentum.rsi.toFixed(1)}</strong> 
+                            <span className={`indicator-zone ${technicalAnalysis.technicalAnalysis.momentum.rsiZone.toLowerCase()}`}>
+                              ({technicalAnalysis.technicalAnalysis.momentum.rsiZone})
                             </span>
                           </div>
                           <div className="indicator-explanation">
-                            <strong>What this means:</strong> {getRSIExplanation(technicalData.technicalAnalysis.momentum.rsi)}
+                            <strong>What this means:</strong> {getRSIExplanation(technicalAnalysis.technicalAnalysis.momentum.rsi)}
                           </div>
                         </div>
                       </div>
                     )}
                     
                     {/* Moving Averages Visualization */}
-                    {technicalData.technicalAnalysis.movingAverages && (
+                    {technicalAnalysis.technicalAnalysis.movingAverages && (
                       <div className="indicator-card">
                         <h5>Moving Averages</h5>
                         <div className="ma-visualization">
                           <div className="ma-bars">
                             <div className="ma-bar-group">
                               <div className="ma-label">SMA20</div>
-                              <div className={`ma-bar ${technicalData.technicalAnalysis.movingAverages.priceVsSMA20 > 0 ? 'positive' : 'negative'}`}>
-                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalData.technicalAnalysis.movingAverages.priceVsSMA20), 30)}%` }}></div>
-                                <span className="ma-bar-value">{technicalData.technicalAnalysis.movingAverages.priceVsSMA20.toFixed(2)}%</span>
+                              <div className={`ma-bar ${technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA20 > 0 ? 'positive' : 'negative'}`}>
+                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA20), 30)}%` }}></div>
+                                <span className="ma-bar-value">{technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA20.toFixed(2)}%</span>
                               </div>
                             </div>
                             <div className="ma-bar-group">
                               <div className="ma-label">SMA50</div>
-                              <div className={`ma-bar ${technicalData.technicalAnalysis.movingAverages.priceVsSMA50 > 0 ? 'positive' : 'negative'}`}>
-                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalData.technicalAnalysis.movingAverages.priceVsSMA50), 30)}%` }}></div>
-                                <span className="ma-bar-value">{technicalData.technicalAnalysis.movingAverages.priceVsSMA50.toFixed(2)}%</span>
+                              <div className={`ma-bar ${technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA50 > 0 ? 'positive' : 'negative'}`}>
+                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA50), 30)}%` }}></div>
+                                <span className="ma-bar-value">{technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA50.toFixed(2)}%</span>
                               </div>
                             </div>
                             <div className="ma-bar-group">
                               <div className="ma-label">SMA200</div>
-                              <div className={`ma-bar ${technicalData.technicalAnalysis.movingAverages.priceVsSMA200 > 0 ? 'positive' : 'negative'}`}>
-                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalData.technicalAnalysis.movingAverages.priceVsSMA200), 30)}%` }}></div>
-                                <span className="ma-bar-value">{technicalData.technicalAnalysis.movingAverages.priceVsSMA200.toFixed(2)}%</span>
+                              <div className={`ma-bar ${technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA200 > 0 ? 'positive' : 'negative'}`}>
+                                <div className="ma-bar-fill" style={{ width: `${Math.min(Math.abs(technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA200), 30)}%` }}></div>
+                                <span className="ma-bar-value">{technicalAnalysis.technicalAnalysis.movingAverages.priceVsSMA200.toFixed(2)}%</span>
                               </div>
                             </div>
                           </div>
                           <div className="indicator-explanation">
-                            <strong>What this means:</strong> {getMAExplanation(technicalData.technicalAnalysis.movingAverages)}
+                            <strong>What this means:</strong> {getMAExplanation(technicalAnalysis.technicalAnalysis.movingAverages)}
                           </div>
                         </div>
                       </div>
                     )}
                     
                     {/* Volatility Indicator */}
-                    {technicalData.technicalAnalysis.volatility && (
+                    {technicalAnalysis.technicalAnalysis.volatility && (
                       <div className="indicator-card">
                         <h5>Volatility (ATR)</h5>
                         <div className="volatility-indicator">
                           <div className="volatility-value">
                             <div className="volatility-metric">
                               <span className="volatility-label">ATR:</span>
-                              <span className="volatility-number">${technicalData.technicalAnalysis.volatility.atr.toFixed(2)}</span>
+                              <span className="volatility-number">${technicalAnalysis.technicalAnalysis.volatility.atr.toFixed(2)}</span>
                             </div>
                             <div className="volatility-metric">
                               <span className="volatility-label">ATR%:</span>
-                              <span className="volatility-number">{technicalData.technicalAnalysis.volatility.atrPercent.toFixed(2)}%</span>
+                              <span className="volatility-number">{technicalAnalysis.technicalAnalysis.volatility.atrPercent.toFixed(2)}%</span>
                             </div>
                           </div>
                           <div className="volatility-level">
                             <div className="volatility-bars">
-                              <div className={`volatility-bar ${getVolatilityLevel(technicalData.technicalAnalysis.volatility.atrPercent) === 'low' ? 'active' : ''}`}>Low</div>
-                              <div className={`volatility-bar ${getVolatilityLevel(technicalData.technicalAnalysis.volatility.atrPercent) === 'medium' ? 'active' : ''}`}>Medium</div>
-                              <div className={`volatility-bar ${getVolatilityLevel(technicalData.technicalAnalysis.volatility.atrPercent) === 'high' ? 'active' : ''}`}>High</div>
+                              <div className={`volatility-bar ${getVolatilityLevel(technicalAnalysis.technicalAnalysis.volatility.atrPercent) === 'low' ? 'active' : ''}`}>Low</div>
+                              <div className={`volatility-bar ${getVolatilityLevel(technicalAnalysis.technicalAnalysis.volatility.atrPercent) === 'medium' ? 'active' : ''}`}>Medium</div>
+                              <div className={`volatility-bar ${getVolatilityLevel(technicalAnalysis.technicalAnalysis.volatility.atrPercent) === 'high' ? 'active' : ''}`}>High</div>
                             </div>
                           </div>
                           <div className="indicator-explanation">
-                            <strong>What this means:</strong> {getVolatilityExplanation(technicalData.technicalAnalysis.volatility.atrPercent)}
+                            <strong>What this means:</strong> {getVolatilityExplanation(technicalAnalysis.technicalAnalysis.volatility.atrPercent)}
                           </div>
                         </div>
                       </div>
                     )}
                     
                     {/* Volume Analysis */}
-                    {technicalData.technicalAnalysis.volume && (
+                    {technicalAnalysis.technicalAnalysis.volume && (
                       <div className="indicator-card">
                         <h5>Volume Analysis</h5>
                         <div className="volume-indicator">
                           <div className="volume-ratio">
                             <div className="volume-gauge">
-                              <div className="volume-fill" style={{ width: `${Math.min(technicalData.technicalAnalysis.volume.ratio * 100, 100)}%` }}></div>
+                              <div className="volume-fill" style={{ width: `${Math.min(technicalAnalysis.technicalAnalysis.volume.ratio * 100, 100)}%` }}></div>
                             </div>
                             <div className="volume-labels">
                               <span>0%</span>
@@ -636,12 +691,12 @@ const StockDetail = () => {
                             </div>
                           </div>
                           <div className="volume-data">
-                            <div>Current: {formatLargeNumber(technicalData.technicalAnalysis.volume.current)}</div>
-                            <div>20-Day Avg: {formatLargeNumber(technicalData.technicalAnalysis.volume.average20Day)}</div>
-                            <div>Ratio: {technicalData.technicalAnalysis.volume.ratio.toFixed(2)}x</div>
+                            <div>Current: {formatLargeNumber(technicalAnalysis.technicalAnalysis.volume.current)}</div>
+                            <div>20-Day Avg: {formatLargeNumber(technicalAnalysis.technicalAnalysis.volume.average20Day)}</div>
+                            <div>Ratio: {technicalAnalysis.technicalAnalysis.volume.ratio.toFixed(2)}x</div>
                           </div>
                           <div className="indicator-explanation">
-                            <strong>What this means:</strong> {getVolumeExplanation(technicalData.technicalAnalysis.volume.ratio)}
+                            <strong>What this means:</strong> {getVolumeExplanation(technicalAnalysis.technicalAnalysis.volume.ratio)}
                           </div>
                         </div>
                       </div>
@@ -650,11 +705,11 @@ const StockDetail = () => {
                 )}
                 
                 {/* Relative Strength vs SPY Visualization */}
-                {technicalData.relativeStrength && Object.keys(technicalData.relativeStrength).length > 0 && (
+                {technicalAnalysis.relativeStrength && Object.keys(technicalAnalysis.relativeStrength).length > 0 && (
                   <div className="relative-strength">
                     <h4>Relative Strength (vs S&P 500)</h4>
                     <div className="rs-cards">
-                      {Object.entries(technicalData.relativeStrength).map(([period, data]) => (
+                      {Object.entries(technicalAnalysis.relativeStrength).map(([period, data]) => (
                         <div key={period} className="rs-card">
                           <div className="rs-period">{formatPeriod(period)}</div>
                           <div className="rs-comparison">
@@ -683,17 +738,17 @@ const StockDetail = () => {
                       ))}
                     </div>
                     <div className="rs-summary">
-                      <strong>Summary:</strong> {getRelativeStrengthSummary(technicalData.relativeStrength)}
+                      <strong>Summary:</strong> {getRelativeStrengthSummary(technicalAnalysis.relativeStrength)}
                     </div>
                   </div>
                 )}
                 
                 {/* Chart Patterns */}
-                {technicalData.patterns && technicalData.patterns.length > 0 && (
+                {technicalAnalysis.patterns && technicalAnalysis.patterns.length > 0 && (
                   <div className="chart-patterns">
                     <h4>Detected Chart Patterns</h4>
                     <ul className="pattern-list">
-                      {technicalData.patterns.map((pattern, index) => (
+                      {technicalAnalysis.patterns.map((pattern, index) => (
                         <li key={index} className="pattern-item">
                           <div className="pattern-icon">{getPatternIcon(pattern.name)}</div>
                           <div className="pattern-details">
@@ -898,7 +953,7 @@ const StockDetail = () => {
             )}
             
             {/* Technical Analysis Legend and Help */}
-            {technicalData && (
+            {technicalAnalysis && (
               <div className="technical-help">
                 <h4>Understanding Technical Analysis</h4>
                 <div className="help-content">
@@ -991,6 +1046,53 @@ const StockDetail = () => {
             ) : (
               <p>No unreliable sources identified.</p>
             )}
+          </div>
+        )}
+        
+        {activeTab === 'ai-analysis' && (
+          <div className="ai-analysis-tab">
+            {aiLoading ? (
+              <div className="loading">Generating AI insights...</div>
+            ) : aiError ? (
+              <div className="error">
+                <p>Error: {aiError}</p>
+                <button className="retry-button" onClick={fetchAiAnalysis}>
+                  Retry
+                </button>
+              </div>
+            ) : aiAnalysis ? (
+              <div className="ai-report">
+                <div className="ai-header">
+                  <h3>AI-Powered Analysis</h3>
+                  <div className="ai-source">
+                    <span>Powered by Gemini AI</span>
+                    <span className="timestamp">Generated: {aiAnalysis.timestamp}</span>
+                  </div>
+                </div>
+                <div className="ai-content">
+                  {aiAnalysis.analysis.split('\n\n').map((paragraph, index) => {
+                    // Check if paragraph is a heading (starts with #, ##, etc.)
+                    if (paragraph.startsWith('#')) {
+                      return <h4 key={index}>{paragraph.replace(/^#+\s/, '')}</h4>;
+                    }
+                    
+                    // Check if paragraph starts with a numbered list item
+                    if (/^\d+\./.test(paragraph)) {
+                      return <p key={index} className="numbered-item">{paragraph}</p>;
+                    }
+                    
+                    // Regular paragraph
+                    return <p key={index}>{paragraph}</p>;
+                  })}
+                </div>
+                <div className="disclaimer">
+                  <small>
+                    This analysis is generated by AI and should not be considered financial advice. 
+                    Always do your own research before making investment decisions.
+                  </small>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
