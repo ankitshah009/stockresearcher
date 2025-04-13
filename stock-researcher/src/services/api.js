@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+// Default URL for local development (outside Docker), updated to 5001
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
 const api = {
   // Get all stocks (simplified list)
