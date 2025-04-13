@@ -99,11 +99,10 @@ const StockSearch = () => {
     setError(null);
     
     try {
-      const response = await fetch(`/api/search?symbol=${symbol.trim()}`);
+      const result = await api.searchStock(symbol.trim());
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        let errorMessage = errorData.error || errorData.message || 'Failed to search for stock';
+      if (result.error) {
+        let errorMessage = result.error;
         
         // Check if it's an API rate limit issue
         if (errorMessage.includes('request allocation') || errorMessage.includes('rate limit')) {
@@ -114,8 +113,7 @@ const StockSearch = () => {
         }
         setSearchResults([]);
       } else {
-        const data = await response.json();
-        setSearchResults(data);
+        setSearchResults(result);
       }
     } catch (err) {
       console.error('Error during search:', err);

@@ -27,6 +27,7 @@ services:
       - PORT=5001
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
       - TIINGO_API_KEY=0be74c81ad01d25c6b2fa702a38cab425fb0246c
+      - GEMINI_API_KEY=AIzaSyCfm2xX5Lsnpcq18u4Hzv3zbbXkEFbHn44
     networks:
       - app-network
 

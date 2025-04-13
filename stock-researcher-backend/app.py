@@ -1097,16 +1097,18 @@ def search_stock():
         return jsonify({'message': error}), status_code
         
     if not stock_data:
-         return jsonify({'message': f'No stocks found matching {symbol}'}), 404
+         return jsonify([]), 200  # Return empty array
     
-    # Return simplified data for search results
-    return jsonify({
+    # Return as an array for consistency with frontend expectations
+    search_result = [{
         'symbol': stock_data['symbol'],
         'name': stock_data['name'],
-        'currentPrice': stock_data['currentPrice'],
-        'change': stock_data['change'],
-        'percentChange': stock_data['percentChange']
-    })
+        'currentPrice': stock_data.get('currentPrice', 'N/A'),
+        'change': stock_data.get('change', 0),
+        'percentChange': stock_data.get('percentChange', 0)
+    }]
+    
+    return jsonify(search_result)
 
 @app.route('/api/technical-analysis/<symbol>', methods=['GET'])
 def get_technical_analysis(symbol):
@@ -1866,11 +1868,13 @@ def get_enhanced_technical(symbol):
 # Add required imports at the top of the file
 try:
     import google.genai as genai
+    from google.genai import types
 except ImportError:
     print("Google Genai library not found. Installing...")
     import subprocess
     subprocess.check_call(["pip", "install", "--upgrade", "google-genai"])
     import google.genai as genai
+    from google.genai import types
 
 # Gemini API key configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AIzaSyCfm2xX5Lsnpcq18u4Hzv3zbbXkEFbHn44')
@@ -1908,44 +1912,46 @@ def get_ai_analysis(symbol):
         Keep your analysis concise and data-driven, focusing on the most important insights an investor should know.
         """
         
-        # Call Gemini API using direct API requests
+        # Initialize the Gemini API client
         logging.info(f"Calling Gemini API for AI analysis of {symbol}")
         
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-        }
+        # Initialize Gemini client
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
-        payload = {
-            "contents": [
-                {
-                    "parts": [{"text": prompt}]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
-                "topP": 0.8,
-                "topK": 40,
-                "maxOutputTokens": 1024
-            }
-        }
+        # Use the updated model name as provided in the sample code
+        model = "models/gemini-2.5.pro-exp-03-25"
         
-        gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
-        gemini_response = requests.post(
-            gemini_url,
-            headers=headers,
-            json=payload
+        # Prepare content for the API request
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=f"share the analysis for the {symbol} stock"),
+                    types.Part.from_text(text=prompt),
+                ],
+            ),
+        ]
+        
+        # Configure response parameters
+        generate_content_config = types.GenerateContentConfig(
+            response_mime_type="text/plain",
+            temperature=0.2,
+            top_p=0.8,
+            top_k=40,
+            max_output_tokens=1024
         )
         
-        if gemini_response.status_code != 200:
-            logging.error(f"Gemini API error: {gemini_response.text}")
-            return jsonify({"error": f"AI analysis failed: {gemini_response.text}"}), 500
+        # Call the Gemini API
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=generate_content_config,
+        )
         
-        response_data = gemini_response.json()
-        if not response_data.get("candidates") or not response_data["candidates"][0].get("content"):
+        if not response or not response.text:
             return jsonify({"error": "Empty response from AI model"}), 500
         
-        analysis_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
+        analysis_text = response.text
         
         # Package the response
         return jsonify({
