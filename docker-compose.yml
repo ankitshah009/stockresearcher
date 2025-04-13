@@ -16,5 +16,8 @@ services:
       context: ./stock-researcher-backend
     ports:
       - "5001:5001"
+    # Pass the API key from the host environment to the container
+    # Ensure you have ALPHA_VANTAGE_API_KEY set in your shell or a .env file in the project root
     environment:
-      - PORT=5001 
+      - PORT=5001
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY} 
