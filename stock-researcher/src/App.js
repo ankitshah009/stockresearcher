@@ -198,6 +198,9 @@ const StockDetail = () => {
   const [technicalData, setTechnicalData] = useState(null);
   const [technicalLoading, setTechnicalLoading] = useState(false);
   const [technicalError, setTechnicalError] = useState(null);
+  const [newsData, setNewsData] = useState([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsError, setNewsError] = useState(null);
   
   useEffect(() => {
     const fetchStockData = async () => {
@@ -248,6 +251,7 @@ const StockDetail = () => {
   useEffect(() => {
     if (stockData && stockData.symbol) {
       fetchTechnicalData(stockData.symbol);
+      fetchNewsData(stockData.symbol);
     }
   }, [stockData]);
   
@@ -267,6 +271,44 @@ const StockDetail = () => {
       setTechnicalError(error.message);
     } finally {
       setTechnicalLoading(false);
+    }
+  };
+
+  // Add a function to fetch news data
+  const fetchNewsData = async (symbol) => {
+    if (stockData && stockData.latestNews && stockData.latestNews.length > 0) {
+      // News already exists in stockData, no need to fetch again
+      return;
+    }
+    
+    setNewsLoading(true);
+    setNewsError(null);
+    try {
+      // Get news from Polygon API endpoint
+      const response = await fetch(`/api/polygon/news/${symbol}?limit=10`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch news data');
+      }
+      const data = await response.json();
+      
+      if (data && data.results) {
+        setNewsData(data.results);
+        // Add the news to stockData as well
+        setStockData(prevData => ({
+          ...prevData,
+          latestNews: data.results.map(item => ({
+            title: item.title,
+            url: item.article_url,
+            source: item.publisher.name,
+            date: new Date(item.published_utc).toLocaleDateString()
+          }))
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching news:', error);
+      setNewsError(error.message);
+    } finally {
+      setNewsLoading(false);
     }
   };
 
@@ -336,6 +378,12 @@ const StockDetail = () => {
           onClick={() => setActiveTab('technical')}
         >
           Technical Analysis
+        </div>
+        <div 
+          className={`tab ${activeTab === 'news' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('news')}
+        >
+          News
         </div>
         <div 
           className={`tab ${activeTab === 'sources' ? 'active' : ''}`} 
@@ -460,6 +508,33 @@ const StockDetail = () => {
               </div>
             ) : (
               <div className="not-found">No technical data available.</div>
+            )}
+          </div>
+        )}
+        
+        {activeTab === 'news' && (
+          <div className="news-tab">
+            <h3>Latest News</h3>
+            {newsLoading ? (
+              <div className="loading-spinner">Loading news...</div>
+            ) : newsError ? (
+              <div className="error-message">Error: {newsError}</div>
+            ) : stockData && stockData.latestNews && stockData.latestNews.length > 0 ? (
+              <ul className="news-list">
+                {stockData.latestNews.map((article, index) => (
+                  <li key={index} className="news-item">
+                    <a href={article.url} target="_blank" rel="noopener noreferrer" className="news-title">
+                      {article.title}
+                    </a>
+                    <div className="news-metadata">
+                      <span className="news-source">{article.source || 'Financial News'}</span>
+                      <span className="news-date">{article.date || 'Recent'}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No recent news found for {stockData.name}.</p>
             )}
           </div>
         )}
