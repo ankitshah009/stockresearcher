@@ -195,6 +195,9 @@ const StockDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('analysis');
+  const [technicalData, setTechnicalData] = useState(null);
+  const [technicalLoading, setTechnicalLoading] = useState(false);
+  const [technicalError, setTechnicalError] = useState(null);
   
   useEffect(() => {
     const fetchStockData = async () => {
@@ -212,6 +215,32 @@ const StockDetail = () => {
     fetchStockData();
   }, [symbol]);
   
+  // Fetch technical analysis data when stockData changes
+  useEffect(() => {
+    if (stockData && stockData.symbol) {
+      fetchTechnicalData(stockData.symbol);
+    }
+  }, [stockData]);
+  
+  // Function to fetch technical analysis data
+  const fetchTechnicalData = async (symbol) => {
+    setTechnicalLoading(true);
+    setTechnicalError(null);
+    try {
+      const response = await fetch(`/api/technical-analysis/${symbol}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch technical data');
+      }
+      const data = await response.json();
+      setTechnicalData(data);
+    } catch (error) {
+      console.error('Error fetching technical data:', error);
+      setTechnicalError(error.message);
+    } finally {
+      setTechnicalLoading(false);
+    }
+  };
+
   if (loading) {
     return <div className="loading">Loading stock details...</div>;
   }
@@ -265,7 +294,19 @@ const StockDetail = () => {
           className={`tab ${activeTab === 'analysis' ? 'active' : ''}`} 
           onClick={() => setActiveTab('analysis')}
         >
-          Analysis
+          Summary
+        </div>
+        <div 
+          className={`tab ${activeTab === 'analyst' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('analyst')}
+        >
+          Analyst Views
+        </div>
+        <div 
+          className={`tab ${activeTab === 'technical' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('technical')}
+        >
+          Technical Analysis
         </div>
         <div 
           className={`tab ${activeTab === 'sources' ? 'active' : ''}`} 
@@ -288,6 +329,109 @@ const StockDetail = () => {
               <h3>AI-Powered Summary</h3>
               <p>{stockData.summary}</p>
             </div>
+          </div>
+        )}
+        
+        {activeTab === 'analyst' && (
+          <div className="analyst-tab">
+            <h3>Analyst Views</h3>
+            <p>
+              Our AI has analyzed data directly from {stockData.name}'s official sources:
+            </p>
+            <ul className="source-list">
+              {stockData.reliableSources.map((source, index) => (
+                <li key={index}>
+                  <a href={source.url} target="_blank" rel="noopener noreferrer">
+                    {source.name}
+                  </a>
+                  <span className="reliability-badge high">High Reliability</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        
+        {activeTab === 'technical' && (
+          <div className="technical-tab">
+            <h3>Advanced Technical Analysis</h3>
+            {technicalLoading ? (
+              <div className="loading-spinner">Loading technical analysis...</div>
+            ) : technicalError ? (
+              <div className="error-message">Error: {technicalError}</div>
+            ) : technicalData ? (
+              <div className="technical-analysis">
+                {/* Technical Analysis Summary */}
+                {technicalData.technicalAnalysis && (
+                  <div className="trend-summary">
+                    <h4>Trend Analysis</h4>
+                    <div className="technical-metrics">
+                      {Object.keys(technicalData.technicalAnalysis).map((key) => (
+                        <div key={key} className="metric-item">
+                          <span className="metric-label">{key}:</span>
+                          <span className="metric-value">{JSON.stringify(technicalData.technicalAnalysis[key])}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Relative Strength */}
+                {technicalData.relativeStrength && Object.keys(technicalData.relativeStrength).length > 0 && (
+                  <div className="relative-strength">
+                    <h4>Relative Strength (vs SPY)</h4>
+                    <div className="rs-metrics">
+                      {Object.keys(technicalData.relativeStrength).map((key) => (
+                        <div key={key} className="rs-item">
+                          <span className="rs-label">{key}:</span>
+                          <span className="rs-value">{JSON.stringify(technicalData.relativeStrength[key])}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Chart Patterns */}
+                {technicalData.patterns && technicalData.patterns.length > 0 && (
+                  <div className="chart-patterns">
+                    <h4>Detected Chart Patterns</h4>
+                    <ul className="pattern-list">
+                      {technicalData.patterns.map((pattern, index) => (
+                        <li key={index} className="pattern-item">
+                          <span className="pattern-name">{pattern.name || 'Pattern'}</span>
+                          {pattern.confidence && (
+                            <span className="pattern-confidence">
+                              Confidence: {pattern.confidence}%
+                            </span>
+                          )}
+                          {pattern.priceTarget && (
+                            <span className="pattern-target">
+                              Target: ${pattern.priceTarget}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {/* Volume Profile */}
+                {technicalData.volumeProfile && Object.keys(technicalData.volumeProfile).length > 0 && (
+                  <div className="volume-profile">
+                    <h4>Volume Profile (60-Day)</h4>
+                    <div className="volume-metrics">
+                      {Object.keys(technicalData.volumeProfile).map((key) => (
+                        <div key={key} className="volume-item">
+                          <span className="volume-label">{key}:</span>
+                          <span className="volume-value">{JSON.stringify(technicalData.volumeProfile[key])}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="not-found">No technical data available.</div>
+            )}
           </div>
         )}
         

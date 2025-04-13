@@ -212,6 +212,98 @@ def get_stocks():
     # Even if some fail, return the ones that succeeded
     return jsonify(stock_list)
 
+@app.route('/api/technical-analysis/<symbol>', methods=['GET'])
+def get_technical_analysis(symbol):
+    """Get advanced technical analysis from MCP-trader"""
+    try:
+        # Call the MCP-trader service for stock analysis
+        response = requests.post(
+            'http://mcp-trader:8000/call-tool',
+            json={
+                "name": "analyze-stock",
+                "arguments": {
+                    "symbol": symbol
+                }
+            },
+            timeout=10
+        )
+        
+        # Initialize analysis result with default empty structure
+        analysis_result = {
+            "technicalAnalysis": {},
+            "relativeStrength": {},
+            "patterns": [],
+            "volumeProfile": {}
+        }
+        
+        if response.status_code == 200:
+            analysis_result["technicalAnalysis"] = response.json()
+            
+            # Call additional MCP tools for more comprehensive analysis
+            try:
+                # Get relative strength data
+                rs_response = requests.post(
+                    'http://mcp-trader:8000/call-tool',
+                    json={
+                        "name": "relative-strength",
+                        "arguments": {
+                            "symbol": symbol,
+                            "benchmark": "SPY"
+                        }
+                    },
+                    timeout=10
+                )
+                if rs_response.status_code == 200:
+                    analysis_result["relativeStrength"] = rs_response.json()
+            except Exception as e:
+                app.logger.warning(f"Error getting relative strength data: {e}")
+            
+            try:
+                # Get pattern detection data
+                pattern_response = requests.post(
+                    'http://mcp-trader:8000/call-tool',
+                    json={
+                        "name": "detect-patterns",
+                        "arguments": {
+                            "symbol": symbol
+                        }
+                    },
+                    timeout=10
+                )
+                if pattern_response.status_code == 200:
+                    analysis_result["patterns"] = pattern_response.json()
+            except Exception as e:
+                app.logger.warning(f"Error getting pattern detection data: {e}")
+            
+            try:
+                # Get volume profile data
+                volume_response = requests.post(
+                    'http://mcp-trader:8000/call-tool',
+                    json={
+                        "name": "volume-profile",
+                        "arguments": {
+                            "symbol": symbol,
+                            "lookback_days": 60
+                        }
+                    },
+                    timeout=10
+                )
+                if volume_response.status_code == 200:
+                    analysis_result["volumeProfile"] = volume_response.json()
+            except Exception as e:
+                app.logger.warning(f"Error getting volume profile data: {e}")
+                
+            return jsonify(analysis_result)
+        else:
+            error_msg = f"Error from MCP-trader: {response.text}"
+            app.logger.error(error_msg)
+            return jsonify({"error": error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Error getting technical analysis: {str(e)}"
+        app.logger.error(error_msg)
+        return jsonify({"error": error_msg}), 500
+
 if __name__ == '__main__':
     if not API_KEY:
         print("WARNING: ALPHA_VANTAGE_API_KEY environment variable not set.")

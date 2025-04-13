@@ -14,6 +14,8 @@ services:
     # No longer need runtime environment variable here for React App
     # environment:
     #   - REACT_APP_API_URL=http://localhost/api
+    networks:
+      - app-network
 
   backend:
     build:
@@ -21,19 +23,28 @@ services:
     ports:
       - "5001:5001"
     # Pass the API key from the host environment to the container
-    # Ensure you have ALPHA_VANTAGE_API_KEY set in your shell or a .env file in the project root
     environment:
       - PORT=5001
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+      - TIINGO_API_KEY=0be74c81ad01d25c6b2fa702a38cab425fb0246c
+    networks:
+      - app-network
+    depends_on:
+      - mcp-trader
 
   mcp-trader:
     build:
       context: ./mcp-trader
       dockerfile: Dockerfile
     environment:
-      - TIINGO_API_KEY=your_tiingo_api_key  # You'll need to sign up for this
+      - TIINGO_API_KEY=0be74c81ad01d25c6b2fa702a38cab425fb0246c  # Using the provided API key
     ports:
       - "8000:8000"  # Exposed port for HTTP mode
     command: uv run mcp-trader --http
     networks:
-      - app-network 
+      - app-network
+
+# Define the network used by all services
+networks:
+  app-network:
+    driver: bridge 
