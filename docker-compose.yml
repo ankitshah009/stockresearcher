@@ -24,4 +24,16 @@ services:
     # Ensure you have ALPHA_VANTAGE_API_KEY set in your shell or a .env file in the project root
     environment:
       - PORT=5001
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY} 
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+
+  mcp-trader:
+    build:
+      context: ./mcp-trader
+      dockerfile: Dockerfile
+    environment:
+      - TIINGO_API_KEY=your_tiingo_api_key  # You'll need to sign up for this
+    ports:
+      - "8000:8000"  # Exposed port for HTTP mode
+    command: uv run mcp-trader --http
+    networks:
+      - app-network 

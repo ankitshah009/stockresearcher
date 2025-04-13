@@ -103,32 +103,26 @@ const StockSearch = () => {
     
     setLoading(true);
     setError(null);
-    setSearchResults(null);
     
     try {
       const result = await api.searchStock(ticker);
+      setSearchResults(result);
       
-      if (result && result.error) {
-        setError(result.error);
-        setSearchResults(null);
-      } else if (result) {
-        setSearchResults(result);
+      // Add to recent searches
+      if (result) {
         const newSearch = {
           symbol: result.symbol,
           name: result.name
         };
+        
         setRecentSearches(prev => {
           const filtered = prev.filter(item => item.symbol !== newSearch.symbol);
           return [newSearch, ...filtered].slice(0, 5);
         });
-      } else {
-        setError('Unexpected response from server.');
-        setSearchResults(null);
       }
     } catch (err) {
-      setError('An unexpected error occurred. Please try again.');
-      setSearchResults(null);
-      console.error("Fallback catch in handleSearch:", err);
+      setError('Error searching for stock. Please try again.');
+      console.error(err);
     } finally {
       setLoading(false);
     }

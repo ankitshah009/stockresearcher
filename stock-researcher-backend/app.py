@@ -63,6 +63,24 @@ def get_stock_data_from_api(symbol):
              # For now, we'll return None to indicate an issue
              return None, "API limit reached or temporary issue"
 
+        # --- Simulate Analyst Data --- 
+        # In a real app, this data would come from a dedicated (likely premium) API
+        simulated_analysts = [
+            {'analystName': 'Future Finance Inc.', 'rating': 'Buy', 'accuracyScore': 78, 'targetPrice': float(quote_data.get('05. price', 0)) * 1.20, 'date': '2025-04-10'},
+            {'analystName': 'Market Insights Co.', 'rating': 'Buy', 'accuracyScore': 85, 'targetPrice': float(quote_data.get('05. price', 0)) * 1.25, 'date': '2025-04-08'},
+            {'analystName': 'Global Growth Grp.', 'rating': 'Hold', 'accuracyScore': 65, 'targetPrice': float(quote_data.get('05. price', 0)) * 1.10, 'date': '2025-04-05'},
+            {'analystName': 'Value Ventures', 'rating': 'Buy', 'accuracyScore': 72, 'targetPrice': float(quote_data.get('05. price', 0)) * 1.18, 'date': '2025-03-28'}
+        ]
+        
+        # Calculate consensus (simple mode calculation)
+        ratings = [a['rating'] for a in simulated_analysts]
+        consensus_rating = max(set(ratings), key=ratings.count) if ratings else 'N/A'
+        
+        # Calculate average target price
+        target_prices = [a['targetPrice'] for a in simulated_analysts if a.get('targetPrice')]
+        average_target_price = round(sum(target_prices) / len(target_prices), 2) if target_prices else None
+        # --- End Simulate Analyst Data ---
+
         stock_info = {
             'symbol': quote_data.get('01. symbol'),
             'name': overview_data.get('Name'),
@@ -83,7 +101,14 @@ def get_stock_data_from_api(symbol):
                 {'name': 'ExampleStockForum.com', 'reason': 'User Generated Content'},
                 {'name': 'HypedStockNews', 'reason': 'Potential Bias'}
             ],
-            'summary': f"Summary for {overview_data.get('Name', symbol)} based on available data. Industry: {overview_data.get('Industry', 'N/A')}. Sector: {overview_data.get('Sector', 'N/A')}."
+            'summary': f"Summary for {overview_data.get('Name', symbol)} based on available data. Industry: {overview_data.get('Industry', 'N/A')}. Sector: {overview_data.get('Sector', 'N/A')}.",
+            
+            # Add simulated analyst data to response
+            'analystData': {
+                'ratings': simulated_analysts,
+                'consensusRating': consensus_rating,
+                'averageTargetPrice': average_target_price
+            }
         }
         
         # Basic validation
